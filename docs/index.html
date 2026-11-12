@@ -40,7 +40,10 @@
   const type = params.get('type') || '';
   const error = params.get('error_description') || params.get('error') || '';
   if (error) {
-    show('This link no longer works', error.replace(/\+/g, ' ') + '.', '<p class="hint">Links are single-use and expire after a while. Go back to the app and request a new one.</p>');
+    const code = params.get('error_code') || '';
+    const friendly = code === 'otp_expired' ? 'The link expired or was already opened once — some mail programs open links on your behalf.'
+      : (/confirm/i.test(error) ? 'Supabase could not confirm this email. Either the link was already used, or this account was confirmed earlier.' : '');
+    show('This link no longer works', error.replace(/\+/g, ' ') + '.', `<p class="hint">${friendly} Go back to the app and request a new one, or sign in if the account already works.</p><p class="hint mono" style="font-family:monospace;font-size:11px;color:#999">${code ? 'code: ' + code : ''}</p>`);
     return;
   }
   const client = supabase.createClient(CONFIG.url, CONFIG.key, { auth: { persistSession: false, detectSessionInUrl: true, flowType: 'implicit' } });
