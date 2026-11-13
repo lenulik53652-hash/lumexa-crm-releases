@@ -1317,7 +1317,7 @@
 
 const STORAGE_KEY = 'lumexa_crm_state_v2';
 const CLOUD_BASE_STORAGE_KEY = 'lumexa_crm_cloud_base_v1';
-const CRM_BUILD_BADGE = 'build 2026-11-16.3';
+const CRM_BUILD_BADGE = 'build 2026-11-16.4';
 /* ----------------- cloud mode (Supabase) -----------------
    When the page is built with window.LUMEXA_CLOUD = { url, key } (crm-next/build.js, used by the
    desktop app), the CRM talks straight to Supabase: sign-in, team, and record-level sync through
@@ -2406,7 +2406,10 @@ function userStartDateKey(userId) {
 /* Nothing dated before a teammate's own account (or their plan's effective date, whichever is later) ever counts. */
 function payoutEffectiveFrom(userId) {
   const plan = payPlanFor(userId);
-  const dates = [plan.effectiveFrom, userStartDateKey(userId)].filter(Boolean);
+  // In the cloud edition every account is new while the meetings and sales came over from the
+  // web CRM, so the sign-up date must not hide earlier work: the plan's effective date is the
+  // only cutoff there. (The web CRM's accounts predate its activity, so its rule stands.)
+  const dates = [plan.effectiveFrom, cloudMode() ? '' : userStartDateKey(userId)].filter(Boolean);
   return dates.length ? dates.sort().pop() : '';
 }
 /* Earliest meeting/sale date in the whole workspace \u2014 used only to seed the Owner's
