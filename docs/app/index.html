@@ -1317,7 +1317,7 @@
 
 const STORAGE_KEY = 'lumexa_crm_state_v2';
 const CLOUD_BASE_STORAGE_KEY = 'lumexa_crm_cloud_base_v1';
-const CRM_BUILD_BADGE = 'build 2026-11-16.4';
+const CRM_BUILD_BADGE = 'build 2026-11-16.5';
 /* ----------------- cloud mode (Supabase) -----------------
    When the page is built with window.LUMEXA_CLOUD = { url, key } (crm-next/build.js, used by the
    desktop app), the CRM talks straight to Supabase: sign-in, team, and record-level sync through
@@ -2085,7 +2085,7 @@ function closeOtherOptions(c, chosen, date) {
   for (const s of saleOptions(c, chosen)) {
     if (s.id === chosen.id || !saleIsOpen(s) || salePayments(s).length) continue;
     s.status = 'not_selected'; s.paidOn = null;
-    s.declinedOn = date || new Date().toISOString().slice(0, 10);
+    s.declinedOn = date || localDateKey(new Date());
     s.declineReason = `Client chose “${chosen.description || 'another option'}” instead`;
     closed++;
   }
@@ -2517,8 +2517,10 @@ function reportEntries(period) {
 function moduleEnabled(name) { return workspaceOptions().modules?.[name] !== false; }
 function roleLabel(role) { return role === 'owner' ? 'Owner' : (role === 'manager' ? 'Manager / IT' : (role === 'boss' ? 'Boss' : 'Sales')); }
 function startOfWeek(d) { const x = new Date(d); const day = x.getDay(); const diff = (day + 6) % 7; x.setHours(0,0,0,0); x.setDate(x.getDate() - diff); return x; }
-function weekKey(d) { const s = startOfWeek(d); return s.toISOString().slice(0,10); }
-function monthKey(d) { const x = new Date(d); return Number.isNaN(x.getTime()) ? '' : x.toISOString().slice(0,7); }
+function weekKey(d) { return localDateKey(startOfWeek(d)); }
+// Every day, week and month key follows the computer's own clock and time zone, never UTC:
+// a meeting booked at 9 pm on the 31st belongs to that month wherever the team sits.
+function monthKey(d) { return localDateKey(d).slice(0,7); }
 function monthLabel(key) { const [y,m] = key.split('-'); return new Date(Number(y), Number(m)-1, 1).toLocaleDateString('en-US', { month:'long', year:'numeric' }); }
 function localDateKey(value) {
   if (!value) return '';
@@ -2613,12 +2615,12 @@ let ui = {
   paletteIndex: 0,
   navigated: false,
   salesTab: 'sales',
-  salesConversionMonth: new Date().toISOString().slice(0,7),
+  salesConversionMonth: localDateKey(new Date()).slice(0,7),
   reportsTab: 'daily',
-  dailyReportDate: new Date().toISOString().slice(0,10),
+  dailyReportDate: localDateKey(new Date()),
   weeklyReportWeek: null, // week start ISO date (Mon)
-  monthlyReportMonth: new Date().toISOString().slice(0,7),
-  calendarMonth: new Date().toISOString().slice(0,7),
+  monthlyReportMonth: localDateKey(new Date()).slice(0,7),
+  calendarMonth: localDateKey(new Date()).slice(0,7),
   calendarTypes: {meeting:true, next:true, onhold:true, custom:true},
   editingCommId: null,          // comm-log entry being inline-edited
   editingMeetingId: null,       // meeting entry being inline-edited
@@ -4734,7 +4736,7 @@ function payoutDateForMonth(mKey) {
   // Paid at beginning of the following month
   const [y, m] = mKey.split('-').map(Number);
   const d = new Date(y, m, 1); // m is 1-based, so this is first day of next month
-  return d.toISOString().slice(0,10);
+  return localDateKey(d);
 }
 /* Month keys that actually have activity for this teammate, from their own start date forward. */
 function activeMonthKeys(userId) {
@@ -7306,7 +7308,7 @@ function renderReports() {
 }
 
 /* ---------- Daily report helpers ---------- */
-function dateKey(d) { return new Date(d).toISOString().slice(0,10); }
+function dateKey(d) { return localDateKey(d); }
 /* userId scopes every count to leads that person owned at the time of each touch/meeting/sale
    (via ownerIdAtDate / the ownerId already attached by allMeetings()/allSales()) — pass null
    for the company-wide total. */
@@ -7507,7 +7509,8 @@ function autofillDaily(dKey, userId = reportActivityUserId()) {
   // Meetings booked today = meetings with createdAt on this day
   const day = dKey;
   const meetings = allMeetings().filter(m => (m.createdAt || m.scheduledOn || '').slice(0,10) === day && (!userId || m.ownerId === userId));
-  const metrics = reportMetricsInRange(`${dKey}T00:00:00`, `${dKey}T23:59:59.999`, userId);
+  // The day runs from local midnight to local midnight; timestamps are stored in UTC.
+  const metrics = reportMetricsInRange(new Date(`${dKey}T00:00:00`).toISOString(), new Date(`${dKey}T23:59:59.999`).toISOString(), userId);
   const callsToday = metrics.calls, emailsToday = metrics.emails, dmsToday = metrics.dms;
   const responsesToday = metrics.responses, pickedUpToday = metrics.pickedUp;
   const totalTouchToday = metrics.touchpoints;
@@ -7619,7 +7622,7 @@ function renderDailyReport() {
 
       ${renderLeadConversationsSection({
         number:'3', title:'Top lead conversations of the day',
-        startIso:`${dKey}T00:00:00`, endIso:`${dKey}T23:59:59.999`, userId:reportActivityUserId(), limit:6, sameDay:true,
+        startIso:new Date(`${dKey}T00:00:00`).toISOString(), endIso:new Date(`${dKey}T23:59:59.999`).toISOString(), userId:reportActivityUserId(), limit:6, sameDay:true,
         emptyText:'No lead reached in on this day yet. Log an incoming email, call or WhatsApp from a contact’s drawer and it appears here, ranked by importance.',
       })}
 
@@ -7719,7 +7722,7 @@ function renderWeeklyReport() {
   const today = new Date();
   const weekStartDate = ui.weeklyReportWeek ? new Date(ui.weeklyReportWeek + 'T00:00:00') : startOfWeek(today);
   const weekEndDate = new Date(weekStartDate); weekEndDate.setDate(weekStartDate.getDate() + 6); weekEndDate.setHours(23,59,59,999);
-  const weekStart = weekStartDate.toISOString().slice(0,10);
+  const weekStart = localDateKey(weekStartDate);
   const startIso = weekStartDate.toISOString();
   const endIso = weekEndDate.toISOString();
   const previousStartDate = new Date(weekStartDate); previousStartDate.setDate(previousStartDate.getDate() - 7);
@@ -8001,16 +8004,16 @@ function getMonthlyReport(mKey) {
 
 function monthlyRange(mKey) {
   const [year, month] = String(mKey).split('-').map(Number);
-  const start = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
-  const end = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+  const start = new Date(year, month - 1, 1, 0, 0, 0, 0);
+  const end = new Date(year, month, 0, 23, 59, 59, 999);
   return { start, end, startIso:start.toISOString(), endIso:end.toISOString() };
 }
 
 function renderMonthlyReport() {
-  const mKey = ui.monthlyReportMonth || new Date().toISOString().slice(0,7);
+  const mKey = ui.monthlyReportMonth || localDateKey(new Date()).slice(0,7);
   const report = getMonthlyReport(mKey);
   const { start, end, startIso, endIso } = monthlyRange(mKey);
-  const previousMonth = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() - 1, 1)).toISOString().slice(0,7);
+  const previousMonth = localDateKey(new Date(start.getFullYear(), start.getMonth() - 1, 1)).slice(0,7);
   const previousRange = monthlyRange(previousMonth);
   const userId = reportActivityUserId();
   const currentMetrics = reportMetricsInRange(startIso, endIso, userId);
@@ -8072,7 +8075,7 @@ function renderMonthlyReport() {
   const weeklyRows = [];
   let cursor = startOfWeek(start);
   while (cursor <= end) {
-    const weekEnd = new Date(cursor); weekEnd.setUTCDate(weekEnd.getUTCDate() + 6); weekEnd.setUTCHours(23,59,59,999);
+    const weekEnd = new Date(cursor); weekEnd.setDate(weekEnd.getDate() + 6); weekEnd.setHours(23,59,59,999);
     const segmentStart = cursor < start ? start : cursor;
     const segmentEnd = weekEnd > end ? end : weekEnd;
     const segmentStartIso = segmentStart.toISOString();
@@ -8089,12 +8092,12 @@ function renderMonthlyReport() {
       return !userId || ownerIdAtDate(c, first.slice(0,10)) === userId;
     }).length;
     weeklyRows.push({
-      label: `${fmtUtcDate(segmentStartIso)} – ${fmtUtcDate(segmentEndIso)}`,
+      label: `${fmtDate(segmentStartIso)} – ${fmtDate(segmentEndIso)}`,
       calls, emails, dms, total:calls + emails + dms,
       responses:segmentMetrics.responses, conversations:segmentMetrics.conversations,
       meetings:meetingCount, newLeads,
     });
-    cursor = new Date(cursor); cursor.setUTCDate(cursor.getUTCDate() + 7);
+    cursor = new Date(cursor); cursor.setDate(cursor.getDate() + 7);
   }
 
   const leadPriority = { Hot:100, Warm:65, Cold:25, 'On Hold':10, Inactive:0 };
@@ -9862,7 +9865,7 @@ function bindPageHandlersRest() {
   });
   // Daily report
   const dailyDate = document.getElementById('daily-date');
-  if (dailyDate) dailyDate.addEventListener('change', () => { ui.dailyReportDate = dailyDate.value || new Date().toISOString().slice(0,10); renderPage(); });
+  if (dailyDate) dailyDate.addEventListener('change', () => { ui.dailyReportDate = dailyDate.value || localDateKey(new Date()); renderPage(); });
   document.querySelectorAll('[data-daily-field]').forEach(el => {
     el.addEventListener('input', () => {
       const key = el.getAttribute('data-daily-field');
@@ -9956,7 +9959,7 @@ function bindPageHandlersRest() {
   document.querySelectorAll('[data-weekly-field]').forEach(el => {
     el.addEventListener('input', () => {
       const weekDate = ui.weeklyReportWeek ? new Date(ui.weeklyReportWeek + 'T00:00:00') : startOfWeek(new Date());
-      const weekKey = weekDate.toISOString().slice(0,10);
+      const weekKey = localDateKey(weekDate);
       const key = el.getAttribute('data-weekly-field');
       writeReport('weekly', weekKey, { ...getWeeklyReport(weekKey), [key]:el.value, approvedAt:'' });
       saveState();
@@ -9972,7 +9975,7 @@ function bindPageHandlersRest() {
     if (a === 'generate' || a === 'approve') el.addEventListener('click', () => {
       const weekStartDate = ui.weeklyReportWeek ? new Date(ui.weeklyReportWeek + 'T00:00:00') : startOfWeek(new Date());
       const weekEndDate = new Date(weekStartDate); weekEndDate.setDate(weekStartDate.getDate() + 6); weekEndDate.setHours(23,59,59,999);
-      const weekKey = weekStartDate.toISOString().slice(0,10);
+      const weekKey = localDateKey(weekStartDate);
       const metrics = reportMetricsInRange(weekStartDate.toISOString(), weekEndDate.toISOString(), reportActivityUserId());
       const report = { ...getWeeklyReport(weekKey) };
       report.autoMetrics = metrics;
@@ -10000,7 +10003,7 @@ function bindPageHandlersRest() {
   document.querySelectorAll('[data-monthly-action]').forEach(el => {
     const a = el.getAttribute('data-monthly-action');
     if (a === 'print') el.addEventListener('click', printReport);
-    if (a === 'this-month') el.addEventListener('click', () => { ui.monthlyReportMonth = new Date().toISOString().slice(0,7); renderPage(); });
+    if (a === 'this-month') el.addEventListener('click', () => { ui.monthlyReportMonth = localDateKey(new Date()).slice(0,7); renderPage(); });
     if (a === 'generate' || a === 'approve') el.addEventListener('click', () => {
       const mKey = ui.monthlyReportMonth;
       const range = monthlyRange(mKey);
@@ -10548,7 +10551,7 @@ function bindDrawerHandlers() {
 
   document.querySelectorAll('[data-action="add-render-request"]').forEach(el => {
     el.addEventListener('click', () => {
-      const today = new Date().toISOString().slice(0,10);
+      const today = localDateKey(new Date());
       openModal({
         title: 'Add render request',
         subtitle: 'Track the render package the client is asking for so this can be followed up later.',
@@ -10609,7 +10612,7 @@ function bindDrawerHandlers() {
 
   document.querySelectorAll('[data-action="add-render"]').forEach(el => {
     el.addEventListener('click', () => {
-      const today = new Date().toISOString().slice(0,10);
+      const today = localDateKey(new Date());
       openModal({
         title: 'Add render record',
         subtitle: 'Track every render package you send from this contact card.',
@@ -10674,7 +10677,7 @@ function bindDrawerHandlers() {
   // Estimate lifecycle: pending payment → sold or client declined
   document.querySelectorAll('[data-action="add-sale"]').forEach(el => {
     el.addEventListener('click', () => {
-      const today = new Date().toISOString().slice(0,10);
+      const today = localDateKey(new Date());
       openModal({
         title: 'Add estimate',
         subtitle: 'New estimates start as pending payment. Update the outcome later when the client pays or decides not to proceed.',
@@ -10715,7 +10718,7 @@ function bindDrawerHandlers() {
       if (!s) return;
       const paidPct = salePaidPercent(s);
       const remaining = Math.max(0, round2(100 - paidPct));
-      const today = new Date().toISOString().slice(0,10);
+      const today = localDateKey(new Date());
       openModal({
         title: paidPct > 0 ? 'Record another payment' : 'Record a payment',
         subtitle: `${fmtMoney(s.amount)} sale${paidPct ? ` · ${paidPct}% (${fmtMoney(salePaidAmount(s))}) paid so far` : ''}. Commission on this payment counts in the month it was paid.`,
@@ -10772,7 +10775,7 @@ function bindDrawerHandlers() {
       const s = (c.sales||[]).find(x => x.id === el.getAttribute('data-id'));
       if (!s) return;
       if (salePayments(s).length) { toast('Money has already been received on this sale — remove the recorded payments first.'); return; }
-      const today = new Date().toISOString().slice(0,10);
+      const today = localDateKey(new Date());
       const inSet = !!s.optionGroupId;
       openModal({
         title:'Record client decision',
@@ -10882,7 +10885,7 @@ function bindDrawerHandlers() {
       if (!o) return;
       const flag = el.getAttribute('data-flag');
       o[flag] = el.checked;
-      o[`${flag}Date`] = el.checked ? new Date().toISOString().slice(0,10) : '';
+      o[`${flag}Date`] = el.checked ? localDateKey(new Date()) : '';
       saveState(); renderContactDrawer();
     });
   });
@@ -10937,7 +10940,7 @@ function bindDrawerHandlers() {
         // amount" rule the legacy lock below follows.
         recomputeSaleFromPayments(s);
       } else if (s.status === 'paid') {
-        s.paidOn = s.paidOn || s.date || new Date().toISOString().slice(0,10);
+        s.paidOn = s.paidOn || s.date || localDateKey(new Date());
         s.declinedOn = null; s.declineReason = '';
         // Commission is locked in as a fixed dollar amount the moment a sale is marked sold, so a
         // later pay-plan rate change never silently rewrites a historical payout. But that lock
@@ -10953,7 +10956,7 @@ function bindDrawerHandlers() {
         closeOtherOptions(c, s, s.paidOn);
       } else if (s.status === 'declined' || s.status === 'not_selected') {
         s.paidOn = null;
-        s.declinedOn = s.declinedOn || new Date().toISOString().slice(0,10);
+        s.declinedOn = s.declinedOn || localDateKey(new Date());
         s.declineReason = (s.declineReason || '').trim() || (s.status === 'not_selected' ? 'Client chose another option' : '');
       } else {
         s.paidOn = null; s.declinedOn = null; s.declineReason = '';
@@ -11093,7 +11096,7 @@ function openContactedOnDatePicker(id) {
     title: 'Previously contacted',
     subtitle: 'Choose a date to see only the contacts you called, emailed or messaged that day.',
     fields: [
-      { key:'date', label:'Contact date', type:'date', value: t.lastResult?.selectedDate || new Date().toISOString().slice(0,10) },
+      { key:'date', label:'Contact date', type:'date', value: t.lastResult?.selectedDate || localDateKey(new Date()) },
     ],
     submitLabel: 'Show contacts',
     onSubmit: (v) => {
