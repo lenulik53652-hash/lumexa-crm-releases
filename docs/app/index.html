@@ -1062,7 +1062,28 @@
       .calendar-filter-bar{flex-wrap:wrap}
     }
     /* ---- grouped sidebar ---- */
-    .crm-nav { background:var(--crm-nav); color:var(--crm-nav-strong); border-right:1px solid var(--crm-nav-line); }
+    .crm-nav { background:var(--crm-nav); color:var(--crm-nav-strong); border-right:1px solid var(--crm-nav-line); width:256px; }
+    /* Sidebar width is the person's own (dragged edge, collapse button); kept per computer. */
+    @media (min-width:768px) {
+      .crm-nav { width:var(--crm-nav-w, 256px); transition:width .15s ease; }
+      .crm-nav.nav-collapsed { width:68px; }
+      body.nav-resizing .crm-nav { transition:none; }
+      body.nav-resizing { cursor:col-resize; user-select:none; }
+    }
+    .nav-resizer { position:absolute; top:0; right:-3px; width:7px; height:100%; cursor:col-resize; z-index:60; }
+    .nav-resizer:hover, body.nav-resizing .nav-resizer { background:rgba(227,166,59,.45); }
+    .nav-collapse-btn { margin-left:auto; width:26px; height:26px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; color:var(--crm-nav-fg); background:transparent; border:1px solid var(--crm-nav-line); }
+    .nav-collapse-btn:hover { background:var(--crm-nav-hover); color:var(--crm-nav-strong); }
+    .nav-collapsed .nav-text, .nav-collapsed .nav-badge, .nav-collapsed .nav-count, .nav-collapsed .nav-resizer, .nav-collapsed #sync-badge, .nav-collapsed .build-badge, .nav-collapsed .user-chip > div, .nav-collapsed .user-chip button, .nav-collapsed #update-banner { display:none; }
+    .nav-collapsed .nav-head { padding-left:0; padding-right:0; flex-direction:column; gap:8px; }
+    .nav-collapsed .nav-collapse-btn { margin-left:0; }
+    .nav-collapsed .nav-item { justify-content:center; padding-left:0; padding-right:0; }
+    .nav-collapsed .nav-item > span:first-child { opacity:1; }
+    .nav-collapsed .newlead-btn { padding-left:0; padding-right:0; }
+    .nav-collapsed .nav-cloud { justify-content:center; }
+    .nav-collapsed .user-chip { justify-content:center; padding-left:0; }
+    .nav-collapsed .nav-foot { padding-left:8px; padding-right:8px; }
+    .nav-collapsed .nav-foot > .flex { justify-content:center; }
     body .crm-nav .text-white { color:var(--crm-nav-strong); }
     body .crm-nav [class*="text-white/"] { color:var(--crm-nav-fg); }
     body .crm-nav .text-ember { color:var(--crm-accent); }
@@ -1154,7 +1175,7 @@
     .drawer-section > summary::before { content:''; width:7px; height:7px; border-right:2px solid var(--crm-ash); border-bottom:2px solid var(--crm-ash); transform:rotate(-45deg); transition:transform .15s; flex-shrink:0; }
     .drawer-section[open] > summary::before { transform:rotate(45deg); }
     .drawer-section > summary small { font-size:12px; font-weight:400; color:var(--crm-ash); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .meeting-form { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:8px; margin-top:10px; }
+    .meeting-form { display:grid; grid-template-columns:auto auto minmax(0,1fr) auto; gap:8px; margin-top:10px; }
     .proj-card { border:1px solid var(--crm-line); border-radius:12px; padding:12px; margin-top:10px; background:var(--crm-surface); }
     .proj-card.selected { border-color:var(--crm-accent); box-shadow:0 0 0 3px var(--crm-accent-soft); }
     .proj-card-head { display:flex; align-items:center; gap:8px; }
@@ -1317,7 +1338,7 @@
 
 const STORAGE_KEY = 'lumexa_crm_state_v2';
 const CLOUD_BASE_STORAGE_KEY = 'lumexa_crm_cloud_base_v1';
-const CRM_BUILD_BADGE = 'build 2026-11-17.1';
+const CRM_BUILD_BADGE = 'build 2026-11-17.2';
 /* ----------------- time zone -----------------
    Every day, week and month boundary and every displayed time follows the workspace time zone
    (Settings → Workspace), Miami by default, so the whole team sees one calendar wherever a
@@ -2868,6 +2889,7 @@ function mergeWithDefaults(incoming) {
         ...meeting,
         id: meeting?.id || cryptoId(),
         createdByUserId: typeof meeting?.createdByUserId === 'string' ? meeting.createdByUserId : '',
+        type: MEETING_TYPES[meeting?.type] ? meeting.type : '',
       })) : [];
       c.sales = Array.isArray(c.sales) ? c.sales.map(sale => {
         const status = sale?.status === 'paid' ? 'paid' : (sale?.status === 'partial' ? 'partial' : (sale?.status === 'declined' ? 'declined' : (sale?.status === 'not_selected' ? 'not_selected' : 'pending')));
@@ -5046,43 +5068,84 @@ function navAvailable(id) {
   return false;
 }
 
+// Sidebar width and collapsed state are per computer (localStorage), never part of the CRM data.
+const NAV_MIN_W = 180, NAV_MAX_W = 440, NAV_DEFAULT_W = 256;
+function loadNavPrefs() {
+  try {
+    ui.navCollapsed = localStorage.getItem('lumexa_nav_collapsed') === '1';
+    const w = parseInt(localStorage.getItem('lumexa_nav_width') || '', 10);
+    ui.navWidth = Number.isFinite(w) ? Math.min(NAV_MAX_W, Math.max(NAV_MIN_W, w)) : NAV_DEFAULT_W;
+  } catch (e) { ui.navCollapsed = false; ui.navWidth = NAV_DEFAULT_W; }
+  applyNavWidth();
+}
+function applyNavWidth() {
+  const root = document.documentElement;
+  if (root && root.style && typeof root.style.setProperty === 'function') root.style.setProperty('--crm-nav-w', `${ui.navWidth || NAV_DEFAULT_W}px`);
+}
+function saveNavPrefs() {
+  try { localStorage.setItem('lumexa_nav_collapsed', ui.navCollapsed ? '1' : '0'); localStorage.setItem('lumexa_nav_width', String(ui.navWidth || NAV_DEFAULT_W)); } catch (e) { /* private mode */ }
+}
+function toggleNavCollapsed() { ui.navCollapsed = !ui.navCollapsed; saveNavPrefs(); renderAll(); }
+function bindNavResizer() {
+  const handle = document.querySelector('[data-nav-resizer]');
+  if (!handle) return;
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    document.body.classList.add('nav-resizing');
+    const move = (ev) => { ui.navWidth = Math.min(NAV_MAX_W, Math.max(NAV_MIN_W, Math.round(ev.clientX))); applyNavWidth(); };
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); document.body.classList.remove('nav-resizing'); saveNavPrefs(); };
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+  });
+  handle.addEventListener('dblclick', () => { ui.navWidth = NAV_DEFAULT_W; applyNavWidth(); saveNavPrefs(); });
+}
 function renderSidebar() {
+  if (ui.navWidth === undefined) loadNavPrefs();
   const cloudUrl = normalizeHttpUrl(workspaceOptions().cloudDriveUrl || '');
   const me = ui.currentUser || {};
   return `
-    <aside class="w-64 shrink-0 crm-nav flex flex-col fixed md:sticky top-0 h-screen z-50 transition-transform duration-200 overflow-y-auto ${ui.mobileNavOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}" data-testid="sidebar">
-      <div class="px-5 pt-6 pb-4 flex items-center gap-3">
+    <aside class="shrink-0 crm-nav ${ui.navCollapsed ? 'nav-collapsed' : ''} flex flex-col fixed md:sticky top-0 h-screen z-50 transition-transform duration-200 overflow-y-auto ${ui.mobileNavOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}" data-testid="sidebar">
+      <div class="nav-head px-5 pt-6 pb-4 flex items-center gap-3">
         <span class="brand-mark">✳</span>
-        <span class="text-white font-semibold text-[17px] tracking-tight">${esc(workspaceOptions().workspaceName || 'Lumexa')} CRM</span>
+        <span class="nav-text text-white font-semibold text-[17px] tracking-tight">${esc(workspaceOptions().workspaceName || 'Lumexa')} CRM</span>
+        <button type="button" class="nav-collapse-btn hidden md:inline-flex" data-action="toggle-nav-collapse" data-testid="btn-nav-collapse" title="${ui.navCollapsed ? 'Expand the sidebar' : 'Collapse the sidebar'}" aria-label="${ui.navCollapsed ? 'Expand the sidebar' : 'Collapse the sidebar'}">${ui.navCollapsed ? '›' : '‹'}</button>
       </div>
       <div class="px-4">
-        <button class="btn btn-ember newlead-btn w-full justify-center" data-action="new-lead" data-testid="btn-sidebar-new-lead">${svgIcon('plus')} New lead</button>
+        <button class="btn btn-ember newlead-btn w-full justify-center" data-action="new-lead" data-testid="btn-sidebar-new-lead" title="New lead">${svgIcon('plus')}<span class="nav-text"> New lead</span></button>
       </div>
       <nav class="px-3 mt-5 space-y-0.5">
         ${navItems().filter(it => it[3]).map(([id, label, icon, , badge]) => `
-        <div data-nav="${id}" class="nav-item ${ui.page===id?'active':''}" data-testid="nav-${id}">
+        <div data-nav="${id}" class="nav-item ${ui.page===id?'active':''}" data-testid="nav-${id}" title="${esc(label)}">
           <span class="w-5 inline-flex justify-center opacity-80">${svgIcon(icon)}</span>
-          <span>${esc(label)}</span>${badge ? `<span class="nav-badge">${badge}</span>` : ''}
+          <span class="nav-text">${esc(label)}</span>${badge ? `<span class="nav-badge">${badge}</span>` : ''}
         </div>`).join('')}
-        ${canManageWorkspace() ? `<div data-nav="settings" class="nav-item ${ui.page==='settings'?'active':''}" data-testid="nav-settings"><span class="w-5 inline-flex justify-center opacity-80">${svgIcon('settings')}</span><span>Settings</span></div>` : ''}
-        ${cloudUrl ? `<a class="nav-cloud" href="${esc(cloudUrl)}" target="_blank" rel="noopener noreferrer" data-testid="sidebar-cloud-link">${svgIcon('folder')} Customer files cloud</a>` : ''}
+        ${canManageWorkspace() ? `<div data-nav="settings" class="nav-item ${ui.page==='settings'?'active':''}" data-testid="nav-settings" title="Settings"><span class="w-5 inline-flex justify-center opacity-80">${svgIcon('settings')}</span><span class="nav-text">Settings</span></div>` : ''}
+        ${cloudUrl ? `<a class="nav-cloud" href="${esc(cloudUrl)}" target="_blank" rel="noopener noreferrer" data-testid="sidebar-cloud-link" title="Customer files cloud">${svgIcon('folder')}<span class="nav-text"> Customer files cloud</span></a>` : ''}
       </nav>
-      <div class="px-4 mt-auto pb-5 space-y-3">
+      <div class="nav-foot px-4 mt-auto pb-5 space-y-3">
         <div id="update-banner"></div>
         <div class="flex items-center justify-between gap-2 px-1">
           <div id="sync-badge" class="text-[11px] mono text-white/50 min-w-0 truncate"></div>
           <button data-testid="btn-pull-cloud" data-action="pull-cloud" class="nav-btn text-[11px] text-white/60 hover:text-white shrink-0" title="Pull the latest cloud copy">${svgIcon('cloud-down')}</button>
         </div>
-        <div class="px-1 text-[10px] mono uppercase tracking-[0.2em] text-white/35" data-testid="crm-build-badge">${esc(CRM_BUILD_BADGE)} · <span class="kbd" style="background:rgba(255,255,255,.1);color:inherit">⌘K</span></div>
+        <div class="build-badge px-1 text-[10px] mono uppercase tracking-[0.2em] text-white/35" data-testid="crm-build-badge">${esc(CRM_BUILD_BADGE)} · <span class="kbd" style="background:rgba(255,255,255,.1);color:inherit">⌘K</span></div>
         <div class="user-chip border-t border-white/10">
           <span class="avatar" style="${userColor(me.id) ? `background:${esc(userColor(me.id))}` : ''}">${esc(initialsOf(me.name || me.email || '?'))}</span>
           <div class="min-w-0"><strong class="truncate">${esc(me.name || 'User')}</strong><span>${esc(roleLabel(me.role))}</span></div>
           ${ui.authRequired ? `<button type="button" data-action="logout">Sign out</button>` : ''}
         </div>
       </div>
+      <div class="nav-resizer hidden md:block" data-nav-resizer title="Drag to resize the sidebar"></div>
     </aside>
   `;
 }
+// Where a meeting happens: shown next to every meeting (Home, calendar, the lead), colour-coded.
+const MEETING_TYPES = { in_person: { label: 'In person', chip: 'chip-warm' }, zoom: { label: 'Zoom', chip: 'chip-cold' } };
+function meetingTypeChip(m) {
+  const t = MEETING_TYPES[m && m.type];
+  return t ? `<span class="chip ${t.chip}" data-meeting-type="${esc(m.type)}">${t.label}</span>` : '';
+}
+function meetingTypeLabel(m) { const t = MEETING_TYPES[m && m.type]; return t ? t.label : ''; }
+function meetingTypeOptions(selected) { return Object.entries(MEETING_TYPES).map(([k, t]) => `<option value="${k}" ${selected === k ? 'selected' : ''}>${t.label}</option>`).join(''); }
 function initialsOf(name) {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
   if (!parts.length) return '?';
@@ -5474,7 +5537,7 @@ function calendarEntries() {
       const time = isNaN(scheduled) ? '' : localTimeOfDay(scheduled);
       entries.push({
         id:`meeting-${c.id}-${meeting.id}`, type:'meeting', date:localDateKey(meeting.scheduledOn), time,
-        title:`Meeting · ${c.name || 'Contact'}`, notes:meeting.agenda || 'Meeting', contactId:c.id,
+        title:`Meeting · ${c.name || 'Contact'}`, notes:meeting.agenda || 'Meeting', contactId:c.id, meetingType: MEETING_TYPES[meeting.type] ? meeting.type : '',
         completed:!!meeting.completed,
       });
     }
@@ -5523,7 +5586,7 @@ function renderCalendarEvent(entry, compact = false) {
     ? `data-calendar-contact="${esc(entry.contactId)}"`
     : `data-calendar-custom="${esc(entry.eventId)}"`;
   return `<button class="w-full text-left border rounded px-2 py-1 ${compact ? 'text-[10px]' : 'text-xs'} leading-tight hover:opacity-80" style="${calendarEventStyle(entry.type)}" ${action} title="${esc(entry.notes || entry.title)}">
-    <span class="calendar-type-label">${esc(calendarTypeLabel(entry.type))}</span>${entry.time ? `<span class="mono opacity-70 mr-1">${esc(entry.time)}</span>` : ''}${esc(calendarDisplayTitle(entry))}${entry.completed ? ' ✓' : ''}
+    <span class="calendar-type-label">${esc(calendarTypeLabel(entry.type))}</span>${entry.time ? `<span class="mono opacity-70 mr-1">${esc(entry.time)}</span>` : ''}${entry.meetingType ? `<span class="chip ${MEETING_TYPES[entry.meetingType].chip} mr-1" data-meeting-type="${esc(entry.meetingType)}" style="font-size:9px;padding:0 6px">${MEETING_TYPES[entry.meetingType].label}</span>` : ''}${esc(calendarDisplayTitle(entry))}${entry.completed ? ' ✓' : ''}
   </button>`;
 }
 
@@ -5661,7 +5724,7 @@ function renderDashboard() {
   const tile = (label, value, tone, nav) => `<button type="button" class="card kpi-tile text-left" data-nav="${nav}"><div class="kpi-label">${label}</div><div class="kpi-value ${tone || ''}">${value}</div></button>`;
   const meetingRow = (m) => `<div class="py-2.5 flex items-center justify-between gap-3">
       <div class="min-w-0"><div class="font-semibold text-sm truncate">${esc(m.contactName)}</div><div class="text-xs text-ash truncate">${esc(m.agenda || 'Meeting')}</div></div>
-      <div class="flex items-center gap-2 shrink-0"><span class="text-xs mono text-ash-dark">${esc(localDateKey(m.scheduledOn) === todayKey ? (localTimeOfDay(m.scheduledOn) || 'today') : fmtDateTime(m.scheduledOn))}</span><button class="btn btn-ghost btn-xs" data-action="open-contact" data-id="${esc(m.contactId)}">Open</button></div>
+      <div class="flex items-center gap-2 shrink-0">${meetingTypeChip(m)}<span class="text-xs mono text-ash-dark">${esc(localDateKey(m.scheduledOn) === todayKey ? (localTimeOfDay(m.scheduledOn) || 'today') : fmtDateTime(m.scheduledOn))}</span><button class="btn btn-ghost btn-xs" data-action="open-contact" data-id="${esc(m.contactId)}">Open</button></div>
     </div>`;
   const actionRow = (item) => { const due = nextActionDueMeta(item.date); return `<div class="py-2.5 flex items-center justify-between gap-3">
       <div class="min-w-0"><div class="font-semibold text-sm truncate">${esc(item.contact.name || '—')}</div><div class="text-xs text-ash truncate">${esc(item.label)}</div></div>
@@ -8807,6 +8870,7 @@ function renderContactDrawer() {
         </div>
         <div class="meeting-form">
           <input id="new-meeting-when" type="datetime-local" class="input" data-testid="new-meeting-when" aria-label="Scheduled on"/>
+          <select id="new-meeting-type" class="input" data-testid="new-meeting-type" aria-label="Meeting type">${meetingTypeOptions('in_person')}</select>
           <input id="new-meeting-agenda" type="text" class="input" placeholder="Agenda — what is this meeting about?" data-testid="new-meeting-agenda"/>
           <button class="btn btn-primary" data-action="add-meeting" data-testid="btn-add-meeting">${svgIcon('plus')} Schedule</button>
         </div>
@@ -8832,7 +8896,11 @@ function renderContactDrawer() {
                         <div class="label">Booked on (earns payout this month)</div>
                         <input type="datetime-local" class="input" data-meeting-edit-field="createdAt" data-id="${m.id}" value="${esc(toLocal(m.createdAt || m.scheduledOn))}"/>
                       </div>
-                      <div class="col-span-4">
+                      <div class="col-span-2">
+                        <div class="label">Type</div>
+                        <select class="input" data-meeting-edit-field="type" data-id="${m.id}">${meetingTypeOptions(m.type)}</select>
+                      </div>
+                      <div class="col-span-2">
                         <div class="label">Status</div>
                         <label class="inline-flex items-center gap-2 mt-2">
                           <input type="checkbox" data-meeting-edit-field="completed" data-id="${m.id}" ${m.completed?'checked':''}/>
@@ -8853,7 +8921,7 @@ function renderContactDrawer() {
               return `
               <div class="py-3 flex items-center justify-between gap-3" data-testid="meeting-row-${m.id}">
                 <div class="min-w-0">
-                  <div class="text-sm font-semibold">${esc(m.agenda || 'Meeting')}</div>
+                  <div class="text-sm font-semibold flex items-center gap-2 flex-wrap">${esc(m.agenda || 'Meeting')}${meetingTypeChip(m)}</div>
                   <div class="text-xs text-ash mono">
                     Scheduled on ${fmtDateTime(m.scheduledOn)}${m.createdAt ? ` · booked ${fmtDate(m.createdAt)}` : ''}
                   </div>
@@ -9304,7 +9372,9 @@ function bindSidebarHandlers() {
     if (a === 'pull-cloud')    el.addEventListener('click', () => pullFromBackend(false));
     if (a === 'logout')        el.addEventListener('click', logout);
     if (a === 'toggle-mobile-nav') el.addEventListener('click', () => { ui.mobileNavOpen = !ui.mobileNavOpen; renderAll(); });
+    if (a === 'toggle-nav-collapse') el.addEventListener('click', toggleNavCollapsed);
     if (a === 'close-mobile-nav')  el.addEventListener('click', () => { ui.mobileNavOpen = false; renderAll(); });
+    if (a === 'toggle-nav-collapse' && !el.__navResizerBound) { el.__navResizerBound = true; bindNavResizer(); }
     if (a === 'open-palette')      el.addEventListener('click', openCommandPalette);
   });
 }
@@ -10461,7 +10531,8 @@ function bindDrawerHandlers() {
     const meetingCreatedAt = new Date().toISOString();
     // Credit goes to whoever owns this lead, not whoever happens to be typing it in (an owner/
     // manager entering it on a teammate's behalf shouldn't steal that teammate's payout credit).
-    c.meetings.push({ id: cryptoId(), scheduledOn: parseLocalInput(when).toISOString(), agenda, completed: false, createdAt: meetingCreatedAt, createdByUserId: ownerIdAtDate(c, meetingCreatedAt) || ui.currentUser?.id || '' });
+    const type = MEETING_TYPES[document.getElementById('new-meeting-type')?.value] ? document.getElementById('new-meeting-type').value : 'in_person';
+    c.meetings.push({ id: cryptoId(), scheduledOn: parseLocalInput(when).toISOString(), agenda, type, completed: false, createdAt: meetingCreatedAt, createdByUserId: ownerIdAtDate(c, meetingCreatedAt) || ui.currentUser?.id || '' });
     saveStateNow(); renderContactDrawer();
   });
 
