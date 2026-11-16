@@ -1317,7 +1317,68 @@
 
 const STORAGE_KEY = 'lumexa_crm_state_v2';
 const CLOUD_BASE_STORAGE_KEY = 'lumexa_crm_cloud_base_v1';
-const CRM_BUILD_BADGE = 'build 2026-11-16.6';
+const CRM_BUILD_BADGE = 'build 2026-11-17.1';
+/* ----------------- time zone -----------------
+   Every day, week and month boundary and every displayed time follows the workspace time zone
+   (Settings → Workspace), Miami by default, so the whole team sees one calendar wherever a
+   computer happens to sit. "This computer's time zone" switches back to the local clock.
+   Timestamps are stored in UTC as before; only the reading changes. */
+const DEFAULT_TIME_ZONE = 'America/New_York';
+const TIME_ZONE_CHOICES = [
+  ['America/New_York', 'Miami / New York (Eastern)'], ['America/Chicago', 'Chicago (Central)'], ['America/Denver', 'Denver (Mountain)'],
+  ['America/Phoenix', 'Phoenix (Arizona)'], ['America/Los_Angeles', 'Los Angeles (Pacific)'], ['America/Halifax', 'Halifax (Atlantic)'],
+  ['America/Mexico_City', 'Mexico City'], ['America/Sao_Paulo', 'São Paulo'], ['Europe/London', 'London'], ['Europe/Madrid', 'Madrid'],
+  ['Europe/Prague', 'Prague (Central Europe)'], ['UTC', 'UTC'], ['computer', "This computer's time zone"],
+];
+function validTimeZone(z) { try { new Intl.DateTimeFormat('en-US', { timeZone: z }); return true; } catch (e) { return false; } }
+function crmTimeZone() {
+  let z; try { z = state && state.workspaceSettings ? state.workspaceSettings.timeZone : undefined; } catch (e) { z = undefined; }
+  if (z === 'computer') return '';
+  if (typeof z === 'string' && z && validTimeZone(z)) return z;
+  return DEFAULT_TIME_ZONE;
+}
+function tzOpts() { const z = crmTimeZone(); return z ? { timeZone: z } : {}; }
+const _zoneFmt = new Map();
+function zoneFormatter(zone) {
+  const k = zone || 'computer';
+  if (!_zoneFmt.has(k)) _zoneFmt.set(k, new Intl.DateTimeFormat('en-US', { ...(zone ? { timeZone: zone } : {}), hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', weekday: 'short' }));
+  return _zoneFmt.get(k);
+}
+const WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+// Calendar parts of an instant, read in the workspace zone.
+function zoneParts(date, zone = crmTimeZone()) {
+  const out = {};
+  for (const part of zoneFormatter(zone).formatToParts(date)) {
+    if (part.type === 'weekday') out.wd = WEEKDAY_INDEX[part.value] ?? 0;
+    else if (part.type !== 'literal') out[part.type] = Number(part.value);
+  }
+  if (out.hour === 24) out.hour = 0;
+  return { y: out.year, m: out.month, d: out.day, h: out.hour, mi: out.minute, s: out.second, wd: out.wd };
+}
+function zoneOffsetMs(date, zone) { const p = zoneParts(date, zone); return Date.UTC(p.y, p.m - 1, p.d, p.h, p.mi, p.s) - Math.floor(date.getTime() / 1000) * 1000; }
+// The instant at a wall-clock time in the workspace zone (month is 1-based).
+function zonedDate(y, m, d, h = 0, mi = 0, sec = 0, ms = 0) {
+  const zone = crmTimeZone();
+  if (!zone) return new Date(y, m - 1, d, h, mi, sec, ms);
+  const guess = Date.UTC(y, m - 1, d, h, mi, sec, ms);
+  const off = zoneOffsetMs(new Date(guess), zone);
+  let t = guess - off;
+  const off2 = zoneOffsetMs(new Date(t), zone);
+  if (off2 !== off) t = guess - off2;
+  return new Date(t);
+}
+function dayStart(dateKey) { const [y, m, d] = String(dateKey).split('-').map(Number); return zonedDate(y, m, d); }
+function dayEnd(dateKey) { const [y, m, d] = String(dateKey).split('-').map(Number); return zonedDate(y, m, d, 23, 59, 59, 999); }
+// Pure calendar arithmetic on 'YYYY-MM-DD' keys: no zone, no DST.
+function shiftDateKey(dateKey, days) { const [y, m, d] = String(dateKey).split('-').map(Number); return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10); }
+function dateKeyDiff(a, b) { const [ay, am, ad] = String(a).split('-').map(Number); const [by, bm, bd] = String(b).split('-').map(Number); return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000); }
+function daysInMonthKey(mKey) { const [y, m] = String(mKey).split('-').map(Number); return new Date(Date.UTC(y, m, 0)).getUTCDate(); }
+// 'YYYY-MM-DDTHH:mm' typed into a datetime-local input ↔ stored UTC timestamp.
+function parseLocalInput(value) { const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(String(value || '').trim()); if (!m) return new Date(value); return zonedDate(+m[1], +m[2], +m[3], +m[4], +m[5], +(m[6] || 0)); }
+function toLocalInput(value) { if (!value) return ''; const d = new Date(value); if (isNaN(d)) return ''; const p = zoneParts(d); const pad = n => String(n).padStart(2, '0'); return `${p.y}-${pad(p.m)}-${pad(p.d)}T${pad(p.h)}:${pad(p.mi)}`; }
+function localTimeOfDay(value) { const d = new Date(value); if (isNaN(d)) return ''; const p = zoneParts(d); const pad = n => String(n).padStart(2, '0'); return `${pad(p.h)}:${pad(p.mi)}`; }
+// A value without a zone ('2026-11-16T09:00') is a wall-clock note (next action, reminder): shown as typed.
+const FLOATING_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
 /* ----------------- cloud mode (Supabase) -----------------
    When the page is built with window.LUMEXA_CLOUD = { url, key } (crm-next/build.js, used by the
    desktop app), the CRM talks straight to Supabase: sign-in, team, and record-level sync through
@@ -1399,6 +1460,7 @@ function defaultState() {
     workspaceSettings: {
       workspaceName: 'Lumexa',
       leadLabel: 'Contact',
+      timeZone: 'America/New_York', // see crmTimeZone(): 'computer' follows each machine's own clock
       defaultCountryCode: '1', // phone numbers typed without a country code are read as this country
       accent: 'indigo',
       density: 'comfortable',
@@ -1646,9 +1708,9 @@ function fmtMoney(n) { return '$' + (Math.round((n||0)*100)/100).toLocaleString(
 function fmtMoneyShort(n) { const v = Math.round((n||0)*100)/100; return '$' + v.toLocaleString('en-US', { minimumFractionDigits: Number.isInteger(v) ? 0 : 2, maximumFractionDigits: 2 }); }
 // A date-only value ('2026-10-13') has no timezone: format it as that calendar day. Parsing it as
 // UTC midnight and printing in local time showed the previous day everywhere west of Greenwich.
-function fmtDate(d) { if(!d) return '—'; if (/^\d{4}-\d{2}-\d{2}$/.test(String(d))) return fmtUtcDate(d); const dt = new Date(d); if (isNaN(dt)) return d; return dt.toLocaleDateString('en-US', { year:'numeric', month:'short', day:'numeric' }); }
+function fmtDate(d) { if(!d) return '—'; if (/^\d{4}-\d{2}-\d{2}$/.test(String(d))) return fmtUtcDate(d); const dt = new Date(d); if (isNaN(dt)) return d; return dt.toLocaleDateString('en-US', { year:'numeric', month:'short', day:'numeric', ...(FLOATING_RE.test(String(d)) ? {} : tzOpts()) }); }
 function fmtUtcDate(d) { if(!d) return '—'; const dt = new Date(d); if (isNaN(dt)) return d; return dt.toLocaleDateString('en-US', { year:'numeric', month:'short', day:'numeric', timeZone:'UTC' }); }
-function fmtDateTime(d) { if(!d) return '—'; const dt = new Date(d); if (isNaN(dt)) return d; return dt.toLocaleString('en-US', { year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }); }
+function fmtDateTime(d) { if(!d) return '—'; const dt = new Date(d); if (isNaN(dt)) return d; return dt.toLocaleString('en-US', { year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', ...(FLOATING_RE.test(String(d)) ? {} : tzOpts()) }); }
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
 function statusSlug(s) { return String(s || '').toLowerCase().replace(/[^a-z]+/g, ''); }
 function isProjectLead(c) { return String(c?.leadType || '').toLowerCase() === 'project'; }
@@ -2227,9 +2289,7 @@ function ownerIdAtDate(c, dateStr) {
   return c?.ownerId || '';
 }
 function addDaysToDateKey(dateKey, days) {
-  const d = new Date(`${dateKey}T00:00:00`);
-  d.setDate(d.getDate() + days);
-  return localDateKey(d);
+  return shiftDateKey(dateKey, days);
 }
 /* Reassigns a lead's owner as of today, closing the previous ownership
    period the day before so a sale keeps crediting whoever owned it then. */
@@ -2516,7 +2576,7 @@ function reportEntries(period) {
 }
 function moduleEnabled(name) { return workspaceOptions().modules?.[name] !== false; }
 function roleLabel(role) { return role === 'owner' ? 'Owner' : (role === 'manager' ? 'Manager / IT' : (role === 'boss' ? 'Boss' : 'Sales')); }
-function startOfWeek(d) { const x = new Date(d); const day = x.getDay(); const diff = (day + 6) % 7; x.setHours(0,0,0,0); x.setDate(x.getDate() - diff); return x; }
+function startOfWeek(d) { const x = new Date(d); if (isNaN(x)) return x; const p = zoneParts(x); const diff = (p.wd + 6) % 7; return dayStart(shiftDateKey(localDateKey(x), -diff)); }
 function weekKey(d) { return localDateKey(startOfWeek(d)); }
 // Every day, week and month key follows the computer's own clock and time zone, never UTC:
 // a meeting booked at 9 pm on the 31st belongs to that month wherever the team sits.
@@ -2528,14 +2588,14 @@ function localDateKey(value) {
   const d = new Date(value);
   if (isNaN(d)) return '';
   const pad = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  if (FLOATING_RE.test(String(value))) return String(value).slice(0, 10);
+  const p = zoneParts(d);
+  return `${p.y}-${pad(p.m)}-${pad(p.d)}`;
 }
 function nextActionDueMeta(value) {
   if (!value) return null;
-  const due = new Date(`${value}T00:00:00`);
-  if (isNaN(due)) return null;
-  const today = new Date(); today.setHours(0,0,0,0);
-  const diff = Math.round((due - today) / 86400000);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value))) return null;
+  const diff = dateKeyDiff(localDateKey(new Date()), String(value));
   if (diff < 0) return { label: `${Math.abs(diff)}d overdue`, tone: 'text-ember' };
   if (diff === 0) return { label: 'Due today', tone: 'text-ember' };
   if (diff === 1) return { label: 'Due tomorrow', tone: 'text-moss' };
@@ -4797,8 +4857,7 @@ function saleCommissionAmount(s, fallbackRate) {
 function payoutDateForMonth(mKey) {
   // Paid at beginning of the following month
   const [y, m] = mKey.split('-').map(Number);
-  const d = new Date(y, m, 1); // m is 1-based, so this is first day of next month
-  return localDateKey(d);
+  return new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10); // m is 1-based, so this is the first day of next month
 }
 /* Month keys that actually have activity for this teammate, from their own start date forward. */
 function activeMonthKeys(userId) {
@@ -4820,16 +4879,15 @@ function activeMonthKeys(userId) {
   set.add(monthKey(new Date()));
   return [...set].sort().reverse();
 }
-function addDays(dateKey, n) { const d = new Date(`${dateKey}T00:00:00`); d.setDate(d.getDate() + n); return localDateKey(d); }
-function daysBetween(a, b) { return Math.round((new Date(`${b}T00:00:00`) - new Date(`${a}T00:00:00`)) / 86400000); }
+function addDays(dateKey, n) { return shiftDateKey(dateKey, n); }
+function daysBetween(a, b) { return dateKeyDiff(a, b); }
 function rangeLabel(start, end) {
   const f = d => new Date(`${d}T00:00:00`).toLocaleDateString('en-US', { month:'short', day:'numeric' });
   return `${f(start)} – ${f(end)}, ${end.slice(0, 4)}`;
 }
 function monthPeriod(mKey) {
-  const [y, m] = mKey.split('-').map(Number);
-  const last = new Date(y, m, 0);
-  return { key: mKey, cycle: 'monthly', start: `${mKey}-01`, end: localDateKey(last), days: last.getDate(), label: monthLabel(mKey), paidOn: payoutDateForMonth(mKey) };
+  const days = daysInMonthKey(mKey);
+  return { key: mKey, cycle: 'monthly', start: `${mKey}-01`, end: `${mKey}-${String(days).padStart(2, '0')}`, days, label: monthLabel(mKey), paidOn: payoutDateForMonth(mKey) };
 }
 function rangePeriod(start, days) {
   const end = addDays(start, days - 1);
@@ -5413,7 +5471,7 @@ function calendarEntries() {
     for (const meeting of (c.meetings || [])) {
       if (!meeting.scheduledOn) continue;
       const scheduled = new Date(meeting.scheduledOn);
-      const time = isNaN(scheduled) ? '' : scheduled.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', hour12:false });
+      const time = isNaN(scheduled) ? '' : localTimeOfDay(scheduled);
       entries.push({
         id:`meeting-${c.id}-${meeting.id}`, type:'meeting', date:localDateKey(meeting.scheduledOn), time,
         title:`Meeting · ${c.name || 'Contact'}`, notes:meeting.agenda || 'Meeting', contactId:c.id,
@@ -5490,8 +5548,7 @@ function renderCalendar() {
     return map;
   }, {});
   const today = localDateKey(new Date());
-  const agendaEnd = new Date(); agendaEnd.setHours(0,0,0,0); agendaEnd.setDate(agendaEnd.getDate() + 30);
-  const agendaEndKey = localDateKey(agendaEnd);
+  const agendaEndKey = shiftDateKey(today, 30);
   const agenda = entries.filter(entry => entry.date >= today && entry.date <= agendaEndKey).slice(0,30);
   const overdue = entries.filter(entry => (entry.type === 'next' || entry.type === 'onhold') && entry.date < today).slice(-10);
   const cells = [];
@@ -5604,7 +5661,7 @@ function renderDashboard() {
   const tile = (label, value, tone, nav) => `<button type="button" class="card kpi-tile text-left" data-nav="${nav}"><div class="kpi-label">${label}</div><div class="kpi-value ${tone || ''}">${value}</div></button>`;
   const meetingRow = (m) => `<div class="py-2.5 flex items-center justify-between gap-3">
       <div class="min-w-0"><div class="font-semibold text-sm truncate">${esc(m.contactName)}</div><div class="text-xs text-ash truncate">${esc(m.agenda || 'Meeting')}</div></div>
-      <div class="flex items-center gap-2 shrink-0"><span class="text-xs mono text-ash-dark">${esc(localDateKey(m.scheduledOn) === todayKey ? (extractTimeOfDay(m.scheduledOn) || 'today') : fmtDateTime(m.scheduledOn))}</span><button class="btn btn-ghost btn-xs" data-action="open-contact" data-id="${esc(m.contactId)}">Open</button></div>
+      <div class="flex items-center gap-2 shrink-0"><span class="text-xs mono text-ash-dark">${esc(localDateKey(m.scheduledOn) === todayKey ? (localTimeOfDay(m.scheduledOn) || 'today') : fmtDateTime(m.scheduledOn))}</span><button class="btn btn-ghost btn-xs" data-action="open-contact" data-id="${esc(m.contactId)}">Open</button></div>
     </div>`;
   const actionRow = (item) => { const due = nextActionDueMeta(item.date); return `<div class="py-2.5 flex items-center justify-between gap-3">
       <div class="min-w-0"><div class="font-semibold text-sm truncate">${esc(item.contact.name || '—')}</div><div class="text-xs text-ash truncate">${esc(item.label)}</div></div>
@@ -5654,9 +5711,7 @@ function actionBucket(c) {
   // doesn't read as merely "handled by someone else" (or get lost in that bucket entirely).
   if (c.status === 'On Hold') return 'onhold';
   if (!c.nextActionDue) return 'unscheduled';
-  const due = new Date(`${localDateKey(c.nextActionDue)}T00:00:00`);
-  const today = new Date(); today.setHours(0,0,0,0);
-  const diff = Math.round((due - today) / 86400000);
+  const diff = dateKeyDiff(localDateKey(new Date()), localDateKey(c.nextActionDue));
   return diff < 0 ? 'overdue' : (diff === 0 ? 'today' : 'upcoming');
 }
 
@@ -5774,11 +5829,11 @@ function relativeDayLabel(iso) {
   if (!key) return '';
   const today = localDateKey(new Date());
   if (key === today) return 'today';
-  const days = Math.round((new Date(`${today}T00:00:00`) - new Date(`${key}T00:00:00`)) / 86400000);
+  const days = dateKeyDiff(key, today);
   if (days === 1) return 'yesterday';
   if (days > 1 && days < 7) return `${days} days ago`;
   const d = new Date(`${key}T00:00:00`);
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: String(key).slice(0, 4) === String(today).slice(0, 4) ? undefined : 'numeric' });
 }
 function contactRowsHtml(filtered) {
   if (filtered.length === 0) {
@@ -6497,7 +6552,7 @@ function auditInitials(entry) {
 function auditTimeLabel(timestamp) {
   const date = new Date(timestamp || '');
   if (isNaN(date)) return '—';
-  return date.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit'});
+  return date.toLocaleTimeString('en-US', { ...tzOpts(), hour:'numeric', minute:'2-digit'});
 }
 
 function groupAuditEvents(entries) {
@@ -6872,6 +6927,7 @@ function renderWorkspaceSettings() {
         <div class="space-y-4">
           <label><div class="label">Workspace name</div><input class="input" data-workspace-field="workspaceName" value="${esc(options.workspaceName)}"/></label>
           <label><div class="label">What do you call a contact?</div><input class="input" data-workspace-field="leadLabel" value="${esc(options.leadLabel)}" placeholder="Contact, lead, client…"/></label>
+          <label><div class="label">Time zone for dates, times, reports and payouts</div><select class="input" data-workspace-field="timeZone" data-testid="workspace-timezone">${TIME_ZONE_CHOICES.map(([v, l]) => `<option value="${esc(v)}" ${(crmTimeZone() || 'computer') === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select><div class="text-xs text-ash mt-1">Now ${esc(new Date().toLocaleTimeString('en-US', { ...tzOpts(), hour:'numeric', minute:'2-digit', timeZoneName:'short' }))} · every computer shows this clock.</div></label>
           <label><div class="label">Team cloud drive (link)</div><input class="input" data-workspace-field="cloudDriveUrl" value="${esc(options.cloudDriveUrl || '')}" placeholder="https://drive.google.com/drive/folders/… or Dropbox / OneDrive link"/><small class="block text-xs text-ash mt-1">Shown in the sidebar and in every lead’s Customer files section, so the shared customer folders are one click away.</small></label>
           <label><div class="label">Default country for phone numbers</div><select class="select" data-workspace-cc data-testid="workspace-country-code">${phoneCountryOptionsHtml(defaultCountryCode())}</select><small class="block text-xs text-ash mt-1">Numbers typed without a country code are read as this country and formatted automatically; any number can carry its own “+” code. Duplicates are recognised by the digits, not the formatting.</small></label>
         </div>
@@ -7503,8 +7559,8 @@ function reportEntryTime(log, sameDay) {
   const dt = new Date(log?.timestamp || '');
   if (isNaN(dt)) return '';
   return sameDay
-    ? dt.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' })
-    : dt.toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+    ? dt.toLocaleTimeString('en-US', { ...tzOpts(),  hour:'2-digit', minute:'2-digit' })
+    : dt.toLocaleString('en-US', { ...tzOpts(), month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
 }
 function renderLeadConversationsSection({ number, title, startIso, endIso, userId, limit, sameDay, emptyText }) {
   const { shown, rest, total } = topLeadConversations(startIso, endIso, userId, limit);
@@ -7573,7 +7629,7 @@ function autofillDaily(dKey, userId = reportActivityUserId()) {
   const day = dKey;
   const meetings = allMeetings().filter(m => (m.createdAt || m.scheduledOn || '').slice(0,10) === day && (!userId || m.ownerId === userId));
   // The day runs from local midnight to local midnight; timestamps are stored in UTC.
-  const metrics = reportMetricsInRange(new Date(`${dKey}T00:00:00`).toISOString(), new Date(`${dKey}T23:59:59.999`).toISOString(), userId);
+  const metrics = reportMetricsInRange(dayStart(dKey).toISOString(), dayEnd(dKey).toISOString(), userId);
   const callsToday = metrics.calls, emailsToday = metrics.emails, dmsToday = metrics.dms;
   const responsesToday = metrics.responses, pickedUpToday = metrics.pickedUp;
   const totalTouchToday = metrics.touchpoints;
@@ -7685,7 +7741,7 @@ function renderDailyReport() {
 
       ${renderLeadConversationsSection({
         number:'3', title:'Top lead conversations of the day',
-        startIso:new Date(`${dKey}T00:00:00`).toISOString(), endIso:new Date(`${dKey}T23:59:59.999`).toISOString(), userId:reportActivityUserId(), limit:6, sameDay:true,
+        startIso:dayStart(dKey).toISOString(), endIso:dayEnd(dKey).toISOString(), userId:reportActivityUserId(), limit:6, sameDay:true,
         emptyText:'No lead reached in on this day yet. Log an incoming email, call or WhatsApp from a contact’s drawer and it appears here, ranked by importance.',
       })}
 
@@ -7714,7 +7770,7 @@ function renderDailyReport() {
 
       <footer class="border-t border-sand mt-8 pt-4 text-[10px] mono uppercase tracking-[0.25em] text-ash flex justify-between">
         <span>Lumexa · daily report</span>
-        <span>Generated ${new Date().toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })}</span>
+        <span>Generated ${new Date().toLocaleDateString('en-US', { ...tzOpts(),  month:'short', day:'numeric', year:'numeric' })}</span>
       </footer>
     </div>
   `;
@@ -7729,9 +7785,10 @@ function weekRangeLabel(weekStartIso) {
   return `${start.toLocaleDateString('en-US', opts)} – ${end.toLocaleDateString('en-US', opts)}, ${y}`;
 }
 function isoWeekNumber(d) {
-  const date = new Date(d); date.setHours(0,0,0,0);
-  date.setDate(date.getDate() + 4 - (date.getDay() || 7));
-  const yearStart = new Date(date.getFullYear(),0,1);
+  const [y, m, dd] = localDateKey(d).split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, dd));
+  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
   return Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
 }
 
@@ -7783,8 +7840,8 @@ function getWeeklyReport(weekKey) {
 
 function renderWeeklyReport() {
   const today = new Date();
-  const weekStartDate = ui.weeklyReportWeek ? new Date(ui.weeklyReportWeek + 'T00:00:00') : startOfWeek(today);
-  const weekEndDate = new Date(weekStartDate); weekEndDate.setDate(weekStartDate.getDate() + 6); weekEndDate.setHours(23,59,59,999);
+  const weekStartDate = ui.weeklyReportWeek ? dayStart(ui.weeklyReportWeek) : startOfWeek(today);
+  const weekEndDate = dayEnd(shiftDateKey(localDateKey(weekStartDate), 6));
   const weekStart = localDateKey(weekStartDate);
   const startIso = weekStartDate.toISOString();
   const endIso = weekEndDate.toISOString();
@@ -7935,7 +7992,7 @@ function renderWeeklyReport() {
           <div>
             <div class="mono text-[10px] tracking-[0.3em] text-ember">LUMEXA · WEEKLY BRIEF</div>
             <h2 class="serif text-4xl mt-2">Weekly contact &amp; lead summary.</h2>
-            <p class="text-sm text-ash mt-2 max-w-2xl">${total} contacts in the funnel as of end of week — status reflects where each one stood on ${weekEndDate.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })}.</p>
+            <p class="text-sm text-ash mt-2 max-w-2xl">${total} contacts in the funnel as of end of week — status reflects where each one stood on ${weekEndDate.toLocaleDateString('en-US', { ...tzOpts(),  month:'short', day:'numeric', year:'numeric' })}.</p>
           </div>
           <div class="text-right">
             <div class="mono text-[10px] tracking-[0.3em] text-ash uppercase">Week №</div>
@@ -7944,7 +8001,7 @@ function renderWeeklyReport() {
           </div>
         </div>
         <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-6">
-          <div class="card p-3"><div class="text-[10px] mono uppercase tracking-[0.2em] text-ash">Funnel</div><div class="serif text-3xl mt-1">${total}</div><div class="text-xs text-ash">contacts by ${weekEndDate.toLocaleDateString('en-US', { month:'short', day:'numeric' })}</div></div>
+          <div class="card p-3"><div class="text-[10px] mono uppercase tracking-[0.2em] text-ash">Funnel</div><div class="serif text-3xl mt-1">${total}</div><div class="text-xs text-ash">contacts by ${weekEndDate.toLocaleDateString('en-US', { ...tzOpts(),  month:'short', day:'numeric' })}</div></div>
           <div class="card p-3"><div class="text-[10px] mono uppercase tracking-[0.2em] text-ash">New this week</div><div class="serif text-3xl mt-1">${newThisWeek.length}</div><div class="text-xs text-ash">first contact in week</div></div>
           <div class="card p-3"><div class="text-[10px] mono uppercase tracking-[0.2em] text-ash">Hot</div><div class="serif text-3xl mt-1">${hot.length}</div><div class="text-xs text-ash">${pct(hot.length)}% of funnel</div></div>
           <div class="card p-3"><div class="text-[10px] mono uppercase tracking-[0.2em] text-ash">Warm</div><div class="serif text-3xl mt-1">${warm.length}</div><div class="text-xs text-ash">${pct(warm.length)}% — nurture</div></div>
@@ -7985,7 +8042,7 @@ function renderWeeklyReport() {
             ${onhold.length>0?`<div class="flex items-center gap-3"><span class="text-xs w-24 mono">On Hold · ${onhold.length}</span>${bar(onhold.length, '#7c6db0')}</div>`:''}
             ${inactive.length>0?`<div class="flex items-center gap-3"><span class="text-xs w-24 mono">Inactive · ${inactive.length}</span>${bar(inactive.length, '#9ca3af')}</div>`:''}
           </div>
-          <p class="text-xs text-ash mt-4">Status shown is what each contact's tag was on ${weekEndDate.toLocaleDateString('en-US', { month:'short', day:'numeric' })} — changes you make later won't rewrite history.</p>
+          <p class="text-xs text-ash mt-4">Status shown is what each contact's tag was on ${weekEndDate.toLocaleDateString('en-US', { ...tzOpts(),  month:'short', day:'numeric' })} — changes you make later won't rewrite history.</p>
         </div>
         <div>
           <h3 class="serif text-2xl mb-3">Activity this week</h3>
@@ -8041,7 +8098,7 @@ function renderWeeklyReport() {
 
       <footer class="border-t border-sand mt-8 pt-4 text-[10px] mono uppercase tracking-[0.25em] text-ash flex justify-between">
         <span>Lumexa · sculptural lighting · brass · copper · aluminum</span>
-        <span>Generated ${new Date().toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })}</span>
+        <span>Generated ${new Date().toLocaleDateString('en-US', { ...tzOpts(),  month:'short', day:'numeric', year:'numeric' })}</span>
       </footer>
     </div>
   `;
@@ -8067,8 +8124,8 @@ function getMonthlyReport(mKey) {
 
 function monthlyRange(mKey) {
   const [year, month] = String(mKey).split('-').map(Number);
-  const start = new Date(year, month - 1, 1, 0, 0, 0, 0);
-  const end = new Date(year, month, 0, 23, 59, 59, 999);
+  const start = dayStart(`${mKey}-01`);
+  const end = dayEnd(`${mKey}-${String(daysInMonthKey(mKey)).padStart(2, '0')}`);
   return { start, end, startIso:start.toISOString(), endIso:end.toISOString() };
 }
 
@@ -8076,7 +8133,7 @@ function renderMonthlyReport() {
   const mKey = ui.monthlyReportMonth || localDateKey(new Date()).slice(0,7);
   const report = getMonthlyReport(mKey);
   const { start, end, startIso, endIso } = monthlyRange(mKey);
-  const previousMonth = localDateKey(new Date(start.getFullYear(), start.getMonth() - 1, 1)).slice(0,7);
+  const previousMonth = shiftDateKey(`${mKey}-01`, -1).slice(0, 7);
   const previousRange = monthlyRange(previousMonth);
   const userId = reportActivityUserId();
   const currentMetrics = reportMetricsInRange(startIso, endIso, userId);
@@ -8138,7 +8195,7 @@ function renderMonthlyReport() {
   const weeklyRows = [];
   let cursor = startOfWeek(start);
   while (cursor <= end) {
-    const weekEnd = new Date(cursor); weekEnd.setDate(weekEnd.getDate() + 6); weekEnd.setHours(23,59,59,999);
+    const weekEnd = dayEnd(shiftDateKey(localDateKey(cursor), 6));
     const segmentStart = cursor < start ? start : cursor;
     const segmentEnd = weekEnd > end ? end : weekEnd;
     const segmentStartIso = segmentStart.toISOString();
@@ -8160,7 +8217,7 @@ function renderMonthlyReport() {
       responses:segmentMetrics.responses, conversations:segmentMetrics.conversations,
       meetings:meetingCount, newLeads,
     });
-    cursor = new Date(cursor); cursor.setDate(cursor.getDate() + 7);
+    cursor = dayStart(shiftDateKey(localDateKey(cursor), 7));
   }
 
   const leadPriority = { Hot:100, Warm:65, Cold:25, 'On Hold':10, Inactive:0 };
@@ -8323,7 +8380,7 @@ function renderMonthlyReport() {
 
       <footer class="border-t border-sand mt-8 pt-4 text-[10px] mono uppercase tracking-[0.25em] text-ash flex justify-between">
         <span>Lumexa · monthly performance review</span>
-        <span>Generated ${new Date().toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })}</span>
+        <span>Generated ${new Date().toLocaleDateString('en-US', { ...tzOpts(),  month:'short', day:'numeric', year:'numeric' })}</span>
       </footer>
     </div>
   `;
@@ -8370,7 +8427,7 @@ function renderCommunicationEntry(call) {
   if (editing) {
     const dt = call.timestamp ? new Date(call.timestamp) : new Date();
     const pad = n => String(n).padStart(2,'0');
-    const dtLocal = `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+    const dtLocal = toLocalInput(dt);
     return `
       <div class="py-4 bg-paper px-3" data-testid="comm-edit-${call.id}">
         <div class="grid grid-cols-12 gap-2">
@@ -8761,9 +8818,7 @@ function renderContactDrawer() {
               const pad = n => String(n).padStart(2,'0');
               const toLocal = iso => {
                 if (!iso) return '';
-                const d = new Date(iso);
-                if (isNaN(d)) return '';
-                return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+                return toLocalInput(iso);
               };
               if (editing) {
                 return `
@@ -9329,7 +9384,7 @@ function bindPageHandlers() {
   document.querySelectorAll('[data-workspace-field]').forEach(el => {
     const saveWorkspaceField = () => {
       const key = el.getAttribute('data-workspace-field');
-      const fallbacks = { workspaceName:'Lumexa', leadLabel:'Contact', cloudDriveUrl:'', googleSheetsSpreadsheetId:'', googleSheetsSheetName:'Sheet1', googleSheetsWebAppUrl:'' };
+      const fallbacks = { workspaceName:'Lumexa', leadLabel:'Contact', cloudDriveUrl:'', googleSheetsSpreadsheetId:'', googleSheetsSheetName:'Sheet1', googleSheetsWebAppUrl:'', timeZone: DEFAULT_TIME_ZONE };
       state.workspaceSettings[key] = key === 'cloudDriveUrl' ? normalizeHttpUrl(el.value) : (el.value.trim() || fallbacks[key] || '');
       saveState(); renderAll();
     };
@@ -10023,7 +10078,7 @@ function bindPageHandlersRest() {
   if (weeklyDate) weeklyDate.addEventListener('change', () => { ui.weeklyReportWeek = weeklyDate.value; renderPage(); });
   document.querySelectorAll('[data-weekly-field]').forEach(el => {
     el.addEventListener('input', () => {
-      const weekDate = ui.weeklyReportWeek ? new Date(ui.weeklyReportWeek + 'T00:00:00') : startOfWeek(new Date());
+      const weekDate = ui.weeklyReportWeek ? dayStart(ui.weeklyReportWeek) : startOfWeek(new Date());
       const weekKey = localDateKey(weekDate);
       const key = el.getAttribute('data-weekly-field');
       writeReport('weekly', weekKey, { ...getWeeklyReport(weekKey), [key]:el.value, approvedAt:'' });
@@ -10038,8 +10093,8 @@ function bindPageHandlersRest() {
     if (a === 'print') el.addEventListener('click', printReport);
     if (a === 'this-week') el.addEventListener('click', () => { ui.weeklyReportWeek = null; renderPage(); });
     if (a === 'generate' || a === 'approve') el.addEventListener('click', () => {
-      const weekStartDate = ui.weeklyReportWeek ? new Date(ui.weeklyReportWeek + 'T00:00:00') : startOfWeek(new Date());
-      const weekEndDate = new Date(weekStartDate); weekEndDate.setDate(weekStartDate.getDate() + 6); weekEndDate.setHours(23,59,59,999);
+      const weekStartDate = ui.weeklyReportWeek ? dayStart(ui.weeklyReportWeek) : startOfWeek(new Date());
+      const weekEndDate = dayEnd(shiftDateKey(localDateKey(weekStartDate), 6));
       const weekKey = localDateKey(weekStartDate);
       const metrics = reportMetricsInRange(weekStartDate.toISOString(), weekEndDate.toISOString(), reportActivityUserId());
       const report = { ...getWeeklyReport(weekKey) };
@@ -10169,7 +10224,7 @@ function bindDrawerHandlers() {
   document.querySelectorAll('[data-action="quick-log"]').forEach(el => el.addEventListener('click', () => {
     const channel = ui.quickLogChannel || 'call';
     const notes = String(ui.quickLogNotes || '').trim();
-    const stamp = ui.quickLogWhenOpen && ui.quickLogWhen ? new Date(ui.quickLogWhen).toISOString() : new Date().toISOString();
+    const stamp = ui.quickLogWhenOpen && ui.quickLogWhen ? parseLocalInput(ui.quickLogWhen).toISOString() : new Date().toISOString();
     if (channel === 'note') {
       if (!notes) { toast('Write the note first.'); return; }
       const line = `${fmtDateTime(stamp)} — ${notes}`;
@@ -10406,7 +10461,7 @@ function bindDrawerHandlers() {
     const meetingCreatedAt = new Date().toISOString();
     // Credit goes to whoever owns this lead, not whoever happens to be typing it in (an owner/
     // manager entering it on a teammate's behalf shouldn't steal that teammate's payout credit).
-    c.meetings.push({ id: cryptoId(), scheduledOn: new Date(when).toISOString(), agenda, completed: false, createdAt: meetingCreatedAt, createdByUserId: ownerIdAtDate(c, meetingCreatedAt) || ui.currentUser?.id || '' });
+    c.meetings.push({ id: cryptoId(), scheduledOn: parseLocalInput(when).toISOString(), agenda, completed: false, createdAt: meetingCreatedAt, createdByUserId: ownerIdAtDate(c, meetingCreatedAt) || ui.currentUser?.id || '' });
     saveStateNow(); renderContactDrawer();
   });
 
@@ -10437,7 +10492,7 @@ function bindDrawerHandlers() {
         if (key === 'completed') {
           m.completed = inp.checked;
         } else if (key === 'scheduledOn' || key === 'createdAt') {
-          m[key] = inp.value ? new Date(inp.value).toISOString() : '';
+          m[key] = inp.value ? parseLocalInput(inp.value).toISOString() : '';
         } else {
           m[key] = inp.value;
         }
@@ -10562,8 +10617,8 @@ function bindDrawerHandlers() {
         const key = inp.getAttribute('data-comm-edit-field');
         let val = inp.type === 'checkbox' ? inp.checked : inp.value;
         if (key === 'timestamp' && val) {
-          // datetime-local → ISO with local timezone preserved
-          val = new Date(val).toISOString();
+          // datetime-local (workspace time zone) → UTC timestamp
+          val = parseLocalInput(val).toISOString();
         }
         changes[key] = val;
       });
@@ -11326,9 +11381,7 @@ function runTask(id, options = {}) {
   if (t.kind === 'contacted-on-date') {
     const selectedDate = options.date;
     if (!selectedDate) return;
-    const dayStart = new Date(`${selectedDate}T00:00:00`);
-    const dayEnd = new Date(`${selectedDate}T23:59:59.999`);
-    const startIso = dayStart.toISOString(), endIso = dayEnd.toISOString();
+    const startIso = dayStart(selectedDate).toISOString(), endIso = dayEnd(selectedDate).toISOString();
     const picks = [];
     for (const c of reportContacts()) {
       const touches = (c.calls || []).filter(log => log.timestamp && log.timestamp >= startIso && log.timestamp <= endIso)
@@ -11345,9 +11398,7 @@ function runTask(id, options = {}) {
   }
 
   if (t.kind === 'contacted-today') {
-    const dayStart = new Date(now); dayStart.setHours(0,0,0,0);
-    const dayEnd   = new Date(now); dayEnd.setHours(23,59,59,999);
-    const sIso = dayStart.toISOString(), eIso = dayEnd.toISOString();
+    const sIso = dayStart(localDateKey(now)).toISOString(), eIso = dayEnd(localDateKey(now)).toISOString();
     // Personal by design: the run is always for the person clicking Run, and its result is kept
     // per person (below) so teammates running the same automation never see each other's list.
     const userId = ui.currentUser?.id || '';
@@ -12048,7 +12099,7 @@ function exportContactedTodayXlsx() {
     'Next action due': c.nextActionDue || '',
     'Contact notes': c.notes || '',
     'Types of contact': p.touches.map(tch => `${chLabel(tch.channel)} · ${communicationTouchLabel(tch)}`).join(', '),
-    Times: p.touches.map(tch => new Date(tch.timestamp).toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' })).join(', '),
+    Times: p.touches.map(tch => new Date(tch.timestamp).toLocaleTimeString('en-US', { ...tzOpts(),  hour:'2-digit', minute:'2-digit' })).join(', '),
     Touches: p.touches.length,
   }; });
   downloadSheet(`lumexa-contacted-today-${exportStamp()}.xlsx`, rows, 'Contacted today');
@@ -12073,9 +12124,7 @@ function closeModal() {
 }
 function modalKeyHandler(e) { if (e.key === 'Escape') closeModal(); }
 function localDatetimeValue(d) {
-  const dt = d ? new Date(d) : new Date();
-  const pad = n => String(n).padStart(2,'0');
-  return `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+  return toLocalInput(d ? new Date(d) : new Date());
 }
 function openModal({ title, subtitle, fields, submitLabel = 'Save', onSubmit }) {
   const root = document.getElementById('modal-root');
