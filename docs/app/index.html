@@ -1341,7 +1341,7 @@
 
 const STORAGE_KEY = 'lumexa_crm_state_v2';
 const CLOUD_BASE_STORAGE_KEY = 'lumexa_crm_cloud_base_v1';
-const CRM_BUILD_BADGE = 'build 2026-11-17.5';
+const CRM_BUILD_BADGE = 'build 2026-11-17.6';
 /* ----------------- time zone -----------------
    Every day, week and month boundary and every displayed time follows the workspace time zone
    (Settings → Workspace), Miami by default, so the whole team sees one calendar wherever a
@@ -3093,7 +3093,7 @@ function mergeWithDefaults(incoming) {
     for (const t of merged.tasks) {
       if (!t || typeof t !== 'object') continue;
       const sameDay = t.kind === 'contacted-today';
-      t.lastResult = cleanResult(t.lastResult, sameDay);
+      t.lastResult = null; // shared slot retired: results are per person in resultsByUser
       if (t.resultsByUser && typeof t.resultsByUser === 'object') {
         for (const key of Object.keys(t.resultsByUser)) t.resultsByUser[key] = cleanResult(t.resultsByUser[key], sameDay);
       }
@@ -7256,8 +7256,8 @@ function renderTaskCard(t) {
           </div>
           <p class="text-sm text-ash mt-2">${esc(t.description)}</p>
           ${(() => {
-            const shown = t.kind === 'contacted-today' ? contactedTodayResultFor(t) : t.lastResult;
-            const ran = t.kind === 'contacted-today' ? (shown?.generatedAt || null) : t.lastRun;
+            const shown = taskResultFor(t);
+            const ran = shown?.generatedAt || null;
             return `<div class="text-xs text-ash mt-2 mono">Last run: ${ran ? fmtDateTime(ran) : 'never'}${shown ? ` · ${(shown.contacts || []).length} contacts` : ''}</div>`;
           })()}
         </div>
@@ -7271,10 +7271,11 @@ function renderTaskCard(t) {
 }
 
 function renderWarmFollowupResult(t) {
-  if (!t.lastResult) {
+  const result = taskResultFor(t);
+  if (!result) {
     return `<div class="mt-4 text-sm text-ash italic">Click <span class="kbd">Run</span> to generate the list.</div>`;
   }
-  const list = t.lastResult.contacts || [];
+  const list = result.contacts || [];
   if (list.length === 0) {
     return `<div class="mt-4 text-sm">Nothing to follow up with right now — every active contact was touched within the last ${t.thresholdDays||7} days. ✓</div>`;
   }
@@ -7298,7 +7299,7 @@ function renderWarmFollowupResult(t) {
             <span class="kbd">${overdue.length} overdue</span>
           </span>
         </div>
-        <div class="text-xs text-ash">Generated ${fmtDateTime(t.lastResult.generatedAt)}</div>
+        <div class="text-xs text-ash">Generated ${fmtDateTime(result.generatedAt)}</div>
       </div>
       <table class="w-full text-sm">
         <thead class="text-left text-[11px] uppercase tracking-[0.18em] text-ash">
@@ -7332,13 +7333,29 @@ function renderWarmFollowupResult(t) {
   `;
 }
 
-// "Contacted today" results are kept per person on the task (resultsByUser), never in the shared
-// lastResult slot — otherwise whoever ran it last would overwrite what every teammate sees.
-function contactedTodayResultKey() { return ui.currentUser?.id || 'local'; }
-function contactedTodayResultFor(t) {
+// Every automation's result is kept per person on the task (resultsByUser[userId]), never in the
+// shared lastResult slot — otherwise whoever ran it last (on any computer) overwrote what every
+// teammate saw. Running an automation is always for the person clicking Run.
+function taskResultKey() { return ui.currentUser?.id || 'local'; }
+function taskResultFor(t) {
   const byUser = (t?.resultsByUser && typeof t.resultsByUser === 'object') ? t.resultsByUser : {};
-  return byUser[contactedTodayResultKey()] || null;
+  return byUser[taskResultKey()] || null;
 }
+function setTaskResult(t, result) {
+  t.resultsByUser = (t.resultsByUser && typeof t.resultsByUser === 'object') ? t.resultsByUser : {};
+  t.resultsByUser[taskResultKey()] = result;
+  t.lastResult = null; // legacy shared slot — never read any more
+}
+// `all` clears everyone's list (a shared setting such as the threshold changed); otherwise only
+// the current person's, so a teammate's list is not wiped from another computer.
+function clearTaskResult(t, all = false) {
+  if (!t) return;
+  t.lastResult = null;
+  if (!t.resultsByUser || typeof t.resultsByUser !== 'object') return;
+  if (all) t.resultsByUser = {}; else delete t.resultsByUser[taskResultKey()];
+}
+function contactedTodayResultKey() { return taskResultKey(); }
+function contactedTodayResultFor(t) { return taskResultFor(t); }
 function renderContactedTodayResult(t) {
   const result = contactedTodayResultFor(t);
   if (!result) {
@@ -7435,10 +7452,11 @@ function projectActivityLabel(activity) {
 }
 
 function renderProjectTrackerResult(t) {
-  if (!t.lastResult) {
+  const result = taskResultFor(t);
+  if (!result) {
     return `<div class="mt-4 text-sm text-ash italic">Click <span class="kbd">Run</span> to see the latest project activity.</div>`;
   }
-  const list = t.lastResult.contacts || [];
+  const list = result.contacts || [];
   if (list.length === 0) {
     return `<div class="mt-4 text-sm">No Project leads yet. Open a contact and set its type to <span class="kbd">Project lead</span>.</div>`;
   }
@@ -7450,7 +7468,7 @@ function renderProjectTrackerResult(t) {
           Project tracker · ${list.length} project lead${list.length===1?'':'s'}
           <span class="ml-3 normal-case tracking-normal"><span class="kbd">${withActivity} with activity</span></span>
         </div>
-        <div class="text-xs text-ash">Generated ${fmtDateTime(t.lastResult.generatedAt)}</div>
+        <div class="text-xs text-ash">Generated ${fmtDateTime(result.generatedAt)}</div>
       </div>
       <table class="w-full text-sm">
         <thead class="text-left text-[11px] uppercase tracking-[0.18em] text-ash">
@@ -7481,10 +7499,11 @@ function renderProjectTrackerResult(t) {
 }
 
 function renderNoResponseResult(t) {
-  if (!t.lastResult) {
+  const result = taskResultFor(t);
+  if (!result) {
     return `<div class="mt-4 text-sm text-ash italic">Click <span class="kbd">Run</span> to check for leads that have not responded.</div>`;
   }
-  const list = t.lastResult.contacts || [];
+  const list = result.contacts || [];
   if (list.length === 0) {
     return `<div class="mt-4 text-sm">No standard leads have ${t.thresholdAttempts||7} unanswered outreach attempts. ✓</div>`;
   }
@@ -7492,7 +7511,7 @@ function renderNoResponseResult(t) {
     <div class="mt-5 border-t border-sand pt-4">
       <div class="flex items-baseline justify-between mb-3 flex-wrap gap-2">
         <div class="text-[11px] mono uppercase tracking-[0.2em] text-ash">No-response recommendations · ${list.length} lead${list.length===1?'':'s'}</div>
-        <div class="text-xs text-ash">Generated ${fmtDateTime(t.lastResult.generatedAt)}</div>
+        <div class="text-xs text-ash">Generated ${fmtDateTime(result.generatedAt)}</div>
       </div>
       <div class="text-xs text-ash mb-3">Counts unanswered outgoing calls, emails and WhatsApp messages. Incoming replies and picked-up calls reset the counter. These are suggestions only.</div>
       <table class="w-full text-sm">
@@ -7524,11 +7543,12 @@ function renderNoResponseResult(t) {
 }
 
 function renderContactedOnDateResult(t) {
-  if (!t.lastResult) {
+  const result = taskResultFor(t);
+  if (!result) {
     return `<div class="mt-4 text-sm text-ash italic">Click <span class="kbd">Run</span>, then choose a date to see only contacts reached that day.</div>`;
   }
-  const list = t.lastResult.contacts || [];
-  const selectedDate = t.lastResult.selectedDate || '';
+  const list = result.contacts || [];
+  const selectedDate = result.selectedDate || '';
   const label = selectedDate ? fmtDate(`${selectedDate}T12:00:00`) : 'the selected date';
   if (list.length === 0) {
     return `<div class="mt-4 text-sm">No calls, emails or WhatsApp messages were logged on ${esc(label)}.</div>`;
@@ -7538,7 +7558,7 @@ function renderContactedOnDateResult(t) {
     <div class="mt-5 border-t border-sand pt-4">
       <div class="flex items-baseline justify-between mb-3 flex-wrap gap-2">
         <div class="text-[11px] mono uppercase tracking-[0.2em] text-ash">Contacted on ${esc(label)} · ${list.length} contact${list.length===1?'':'s'}</div>
-        <div class="text-xs text-ash">Generated ${fmtDateTime(t.lastResult.generatedAt)}</div>
+        <div class="text-xs text-ash">Generated ${fmtDateTime(result.generatedAt)}</div>
       </div>
       <table class="w-full text-sm">
         <thead class="text-left text-[11px] uppercase tracking-[0.18em] text-ash">
@@ -11357,7 +11377,7 @@ function editTask(id) {
         const n = Math.max(1, Math.min(365, parseInt(v.days, 10) || 7));
         t.thresholdDays = n;
         t.enabled = v.enabled === 'on';
-        t.lastResult = null;
+        clearTaskResult(t, true);
         saveState(); renderPage();
         toast(`Threshold set to ${n} days. Click Run to refresh the list.`);
       },
@@ -11377,7 +11397,7 @@ function editTask(id) {
         const n = Math.max(1, Math.min(100, parseInt(v.attempts, 10) || 7));
         t.thresholdAttempts = n;
         t.enabled = v.enabled === 'on';
-        t.lastResult = null;
+        clearTaskResult(t, true);
         saveState(); renderPage();
         toast(`Recommendation threshold set to ${n} unanswered reach-outs.`);
       },
@@ -11393,7 +11413,7 @@ function openContactedOnDatePicker(id) {
     title: 'Previously contacted',
     subtitle: 'Choose a date to see only the contacts you called, emailed or messaged that day.',
     fields: [
-      { key:'date', label:'Contact date', type:'date', value: t.lastResult?.selectedDate || localDateKey(new Date()) },
+      { key:'date', label:'Contact date', type:'date', value: taskResultFor(t)?.selectedDate || localDateKey(new Date()) },
     ],
     submitLabel: 'Show contacts',
     onSubmit: (v) => {
@@ -11405,7 +11425,7 @@ function openContactedOnDatePicker(id) {
 
 function invalidateNoResponseResult() {
   for (const task of (state.tasks || [])) {
-    if (task.kind === 'no-response-recommendation') task.lastResult = null;
+    if (task.kind === 'no-response-recommendation') clearTaskResult(task);
   }
 }
 
@@ -11432,7 +11452,7 @@ function applyNoResponseRecommendation(id, status, attempts) {
   c.statusReason = `${attempts} unanswered outreach attempt${attempts===1?'':'s'} — set from no-response recommendation.`;
   c.statusHistory = c.statusHistory || [];
   c.statusHistory.push({ status, changedAt: new Date().toISOString() });
-  for (const task of state.tasks) if (task.kind === 'no-response-recommendation') task.lastResult = null;
+  for (const task of state.tasks) if (task.kind === 'no-response-recommendation') clearTaskResult(task);
   saveState(); renderAll();
   toast(`${c.name || 'Contact'} marked ${status}.`);
 }
@@ -11491,7 +11511,7 @@ function runTask(id, options = {}) {
       if (sa !== sb) return sa - sb;
       return (b.daysSince || 0) - (a.daysSince || 0);
     });
-    t.lastResult = { v3: true, generatedAt: nowIso, contacts: picks };
+    setTaskResult(t, { v3: true, generatedAt: nowIso, contacts: picks });
     saveState(); renderPage();
     const neverN = picks.filter(p => p.daysSince === null).length;
     toast(`Found ${picks.length} contact${picks.length===1?'':'s'} (${neverN} never contacted · ${picks.length - neverN} overdue).`);
@@ -11523,7 +11543,7 @@ function runTask(id, options = {}) {
       if (!b.lastActivity) return -1;
       return (b.lastActivity.timestamp || '').localeCompare(a.lastActivity.timestamp || '');
     });
-    t.lastResult = { v2: true, generatedAt: nowIso, contacts: projects };
+    setTaskResult(t, { v2: true, generatedAt: nowIso, contacts: projects });
     saveState(); renderPage();
     const active = projects.filter(p => p.lastActivity).length;
     toast(`${projects.length} project lead${projects.length===1?'':'s'} · ${active} with activity logged.`);
@@ -11551,7 +11571,7 @@ function runTask(id, options = {}) {
       });
     }
     picks.sort((a, b) => b.attempts - a.attempts || (b.lastTimestamp || '').localeCompare(a.lastTimestamp || ''));
-    t.lastResult = { v2: true, generatedAt: nowIso, contacts: picks };
+    setTaskResult(t, { v2: true, generatedAt: nowIso, contacts: picks });
     saveState(); renderPage();
     toast(`${picks.length} lead${picks.length===1?'':'s'} reached ${threshold} unanswered outreach attempts.`);
     return;
@@ -11570,7 +11590,7 @@ function runTask(id, options = {}) {
       picks.push({ id:c.id, name:c.name || '—', status:c.status || 'Cold', pointOfContact:c.pointOfContact || '', touches, latest:touches[touches.length-1].timestamp, ownerId: currentOwnerId(c) });
     }
     picks.sort((a, b) => (b.latest || '').localeCompare(a.latest || ''));
-    t.lastResult = { v2: true, generatedAt: nowIso, selectedDate, contacts: picks };
+    setTaskResult(t, { v2: true, generatedAt: nowIso, selectedDate, contacts: picks });
     saveState(); renderPage();
     toast(`${picks.length} contact${picks.length===1?'':'s'} contacted on ${fmtDate(`${selectedDate}T12:00:00`)}.`);
     return;
@@ -11581,7 +11601,6 @@ function runTask(id, options = {}) {
     // Personal by design: the run is always for the person clicking Run, and its result is kept
     // per person (below) so teammates running the same automation never see each other's list.
     const userId = ui.currentUser?.id || '';
-    const resultKey = contactedTodayResultKey();
     const todayKey = localDateKey(now);
     const picks = [];
     for (const c of reportContacts()) {
@@ -11608,9 +11627,7 @@ function runTask(id, options = {}) {
       }
     }
     picks.sort((a, b) => (b.latest || '').localeCompare(a.latest || ''));
-    t.resultsByUser = (t.resultsByUser && typeof t.resultsByUser === 'object') ? t.resultsByUser : {};
-    t.resultsByUser[resultKey] = { v2: true, generatedAt: nowIso, contacts: picks };
-    t.lastResult = null; // legacy shared slot — no longer read for this automation
+    setTaskResult(t, { v2: true, generatedAt: nowIso, contacts: picks });
     saveState(); renderPage();
     let calls = 0, emails = 0, dms = 0;
     for (const p of picks) for (const tch of p.touches) {
@@ -11932,7 +11949,7 @@ function exportContactsXlsx() {
   const automations = state.tasks.map(task => ({
     'Automation ID': task.id || '', Name: task.name || '', Kind: task.kind || '', Description: task.description || '',
     Trigger: task.trigger || '', Enabled: task.enabled === false ? 'No' : 'Yes', 'Last run': task.lastRun || '',
-    'Last result': xlsxValue(task.lastResult || ''),
+    'Last result': xlsxValue(taskResultFor(task) || ''),
   }));
   const dailyReports = reportEntries('daily').map(([date, report]) => ({ Date: date, ...xlsxRecord(report) }));
   const weeklyReports = reportEntries('weekly').map(([week, report]) => ({ Week: week, ...xlsxRecord(report) }));
