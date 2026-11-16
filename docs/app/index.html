@@ -1338,7 +1338,7 @@
 
 const STORAGE_KEY = 'lumexa_crm_state_v2';
 const CLOUD_BASE_STORAGE_KEY = 'lumexa_crm_cloud_base_v1';
-const CRM_BUILD_BADGE = 'build 2026-11-17.3';
+const CRM_BUILD_BADGE = 'build 2026-11-17.4';
 /* ----------------- time zone -----------------
    Every day, week and month boundary and every displayed time follows the workspace time zone
    (Settings → Workspace), Miami by default, so the whole team sees one calendar wherever a
@@ -3017,17 +3017,28 @@ function mergeWithDefaults(incoming) {
     merged.tasks = merged.tasks.filter(t => KNOWN_KINDS.has(t.kind));
     // Built-in automations are seeded with fresh random ids whenever a browser starts from an
     // empty state, and the additive merge then keeps both copies — collapse to one per kind,
-    // carrying over every person's results and the latest run.
+    // carrying over every person's results and the latest run. The kept copy is the lowest id so
+    // every device keeps the same one, and the dropped copies are tombstoned: without that the
+    // collapse was local only and the next cloud pull brought all the copies straight back.
     const byKind = new Map();
-    merged.tasks = merged.tasks.filter(t => {
+    const dropped = [];
+    for (const t of [...merged.tasks].sort((a, b) => String(a.id).localeCompare(String(b.id)))) {
       const kept = byKind.get(t.kind);
-      if (!kept) { byKind.set(t.kind, t); return true; }
+      if (!kept) { byKind.set(t.kind, t); continue; }
       kept.resultsByUser = (kept.resultsByUser && typeof kept.resultsByUser === 'object') ? kept.resultsByUser : {};
       for (const [uid, r] of Object.entries((t.resultsByUser && typeof t.resultsByUser === 'object') ? t.resultsByUser : {})) if (!kept.resultsByUser[uid]) kept.resultsByUser[uid] = r;
       if (!kept.lastResult && t.lastResult) kept.lastResult = t.lastResult;
       if ((t.lastRun || '') > (kept.lastRun || '')) kept.lastRun = t.lastRun;
-      return false;
-    });
+      if (t.id) dropped.push(t.id);
+    }
+    if (dropped.length) {
+      const now = new Date().toISOString();
+      merged.tombstones = Array.isArray(merged.tombstones) ? merged.tombstones : [];
+      for (const id of dropped) merged.tombstones.push({ id, t: now });
+    }
+    const kindOrder = def.tasks.map(t => t.kind);
+    merged.tasks = merged.tasks.filter(t => byKind.get(t.kind) === t)
+      .sort((a, b) => kindOrder.indexOf(a.kind) - kindOrder.indexOf(b.kind));
     // Ensure the Warm-followup task exists
     if (!merged.tasks.some(t => t.kind === 'warm-followup')) {
       merged.tasks.push(def.tasks[0]);
