@@ -1338,7 +1338,7 @@
 
 const STORAGE_KEY = 'lumexa_crm_state_v2';
 const CLOUD_BASE_STORAGE_KEY = 'lumexa_crm_cloud_base_v1';
-const CRM_BUILD_BADGE = 'build 2026-11-17.2';
+const CRM_BUILD_BADGE = 'build 2026-11-17.3';
 /* ----------------- time zone -----------------
    Every day, week and month boundary and every displayed time follows the workspace time zone
    (Settings → Workspace), Miami by default, so the whole team sees one calendar wherever a
@@ -2289,6 +2289,28 @@ function ownerDotHtml(ownerId) {
   const style = color ? `background:${esc(color)}` : `background:transparent;border:1.5px solid var(--crm-line, #ccc)`;
   return `<span class="owner-dot" style="${style}" title="Owner: ${label}" aria-label="Owner: ${label}"></span>`;
 }
+// The drawer's ownership log: consecutive periods that resolve to the same person (or to
+// "Former teammate") collapse into one line spanning the earliest start and latest end, so a
+// history bloated by repeated imports reads as a handful of handoffs instead of a wall of names.
+function ownershipLogRows(c) {
+  const history = Array.isArray(c?.ownershipHistory) ? c.ownershipHistory : [];
+  const rows = [];
+  for (const period of history) {
+    if (!period) continue;
+    const label = userName(period.userId);
+    const from = period.from || '';
+    const to = period.to || null;
+    const last = rows[rows.length - 1];
+    if (last && last.label === label) {
+      if (from && (!last.from || from < last.from)) last.from = from;
+      if (to === null || last.to === null) last.to = null;
+      else if (to > last.to) last.to = to;
+      continue;
+    }
+    rows.push({ label, from, to });
+  }
+  return rows;
+}
 function currentOwnerId(c) {
   const history = Array.isArray(c?.ownershipHistory) ? c.ownershipHistory : [];
   const open = history.find(period => !period.to);
@@ -2850,7 +2872,11 @@ function mergeWithDefaults(incoming) {
       // vanished from the new owner's "Contacted today", reports and action stream.
       c.ownershipHistory.sort((a, b) => String(a.from).localeCompare(String(b.from))
         || Number(a.to === null) - Number(b.to === null)
-        || String(a.userId).localeCompare(String(b.userId)));
+        || String(a.userId).localeCompare(String(b.userId))
+        || String(a.id).localeCompare(String(b.id)));
+      // Repeated backup imports re-add id-less periods under fresh ids, so the same owner/from/to
+      // piles up once per import. Keep one copy (lowest id, so every device keeps the same one).
+      c.ownershipHistory = c.ownershipHistory.filter((p, i, arr) => !i || !(arr[i - 1].userId === p.userId && arr[i - 1].from === p.from && arr[i - 1].to === p.to));
       for (let i = 0; i < c.ownershipHistory.length - 1; i++) {
         if (c.ownershipHistory[i].to === null) c.ownershipHistory[i].to = c.ownershipHistory[i + 1].from || c.ownershipHistory[i].from;
       }
@@ -8817,7 +8843,7 @@ function renderContactDrawer() {
               <div class="text-sm font-semibold">${esc(userName(currentOwnerId(c)))}</div>
               <div class="text-xs text-ash">Reassign from the buttons at the top of this panel.</div>
               <div class="text-xs text-ash mt-3">Ownership periods</div>
-              <div class="space-y-1 mt-1">${(c.ownershipHistory || []).map(period => `<div class="text-xs mono">${esc(userName(period.userId))} · ${esc(period.from || '—')} to ${esc(period.to || 'present')}</div>`).join('') || '<div class="text-xs text-ash">No owner recorded yet.</div>'}</div>
+              <div class="space-y-1 mt-1">${ownershipLogRows(c).map(row => `<div class="text-xs mono">${esc(row.label)} · ${esc(row.from || '—')} to ${esc(row.to || 'present')}</div>`).join('') || '<div class="text-xs text-ash">No owner recorded yet.</div>'}</div>
             </div>
             <div class="mt-3 card p-3" style="background:${isCampaignLead(c)?'#fff6fd':'#fbfaf6'}">
               <div class="flex items-center flex-wrap justify-between gap-3">
