@@ -1317,7 +1317,7 @@
 
 const STORAGE_KEY = 'lumexa_crm_state_v2';
 const CLOUD_BASE_STORAGE_KEY = 'lumexa_crm_cloud_base_v1';
-const CRM_BUILD_BADGE = 'build 2026-11-16.5';
+const CRM_BUILD_BADGE = 'build 2026-11-16.6';
 /* ----------------- cloud mode (Supabase) -----------------
    When the page is built with window.LUMEXA_CLOUD = { url, key } (crm-next/build.js, used by the
    desktop app), the CRM talks straight to Supabase: sign-in, team, and record-level sync through
@@ -3617,6 +3617,68 @@ async function cloudImportBackup(parsed) {
   toast(ui.lastSyncStatus === 'ok' ? 'Backup imported into the cloud.' : 'Import finished with errors — see the sync badge.');
 }
 
+// Settings → Data → "Add what's missing": the safe way to bring over anything the cloud lacks
+// from a web CRM backup. Only adds — a lead the cloud has never seen, or a meeting, call,
+// estimate, render, order, file, contact person or project the lead here does not have yet.
+// Never changes a value already in the cloud, never brings back what was deleted here.
+const ADD_MISSING_LISTS = { meetings: 'meetings', calls: 'calls', sales: 'estimates', renders: 'renders', renderRequests: 'render requests', orders: 'orders', files: 'files', subcontacts: 'contact people', projects: 'projects' };
+function missingFromBackup(parsed, live, map) {
+  const cleaned = mergeWithDefaults(remapUserIds(parsed, map));
+  const tomb = new Set((live.tombstones || []).map(t => t && String(t.id)));
+  const byId = new Map((live.contacts || []).map(c => [String(c.id), c]));
+  const counts = { contacts: 0 }; for (const k of Object.keys(ADD_MISSING_LISTS)) counts[k] = 0;
+  const newContacts = [], additions = [];
+  for (const fc of (cleaned.contacts || [])) {
+    if (!fc || !fc.id || tomb.has(String(fc.id))) continue;
+    const c = byId.get(String(fc.id));
+    if (!c) { newContacts.push(fc); counts.contacts++; continue; }
+    for (const listKey of Object.keys(ADD_MISSING_LISTS)) {
+      const have = new Set((Array.isArray(c[listKey]) ? c[listKey] : []).map(x => x && String(x.id)));
+      for (const item of (Array.isArray(fc[listKey]) ? fc[listKey] : [])) {
+        if (!item || !item.id || have.has(String(item.id)) || tomb.has(String(item.id))) continue;
+        additions.push({ contact: c, listKey, item }); counts[listKey]++;
+      }
+    }
+  }
+  return { newContacts, additions, counts };
+}
+function describeMissingCounts(counts) {
+  const parts = [];
+  if (counts.contacts) parts.push(`${counts.contacts} new lead${counts.contacts === 1 ? '' : 's'}`);
+  for (const [k, label] of Object.entries(ADD_MISSING_LISTS)) if (counts[k]) parts.push(`${counts[k]} ${label}`);
+  return parts.join(', ');
+}
+async function cloudAddMissingFromBackup(parsed) {
+  try { cloudFullRoster = await cloudBackend().team.roster(); } catch (e) { cloudFullRoster = ui.roster || []; }
+  const map = cloudLegacyIdMap();
+  const { newContacts, additions, counts } = missingFromBackup(parsed, state, map);
+  const summary = describeMissingCounts(counts);
+  if (!summary) { toast('Nothing to add — the cloud already has everything in this file.'); return 0; }
+  if (!confirm(`Add what's missing from this backup?\n\n${summary}.\n\nNothing already in the cloud changes, and nothing deleted here comes back.`)) return 0;
+  for (const fc of newContacts) state.contacts.push(fc);
+  for (const { contact, listKey, item } of additions) { if (!Array.isArray(contact[listKey])) contact[listKey] = []; contact[listKey].push(item); }
+  afterStateMerged(); saveState(); renderAll();
+  toast(`Added ${summary}.`);
+  return newContacts.length + additions.length;
+}
+function addMissingFromBackup() {
+  if (!cloudMode() || !canManageUsers()) { toast('Your role cannot do this.'); return; }
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = 'application/json,.json';
+  input.onchange = () => {
+    const f = input.files[0]; if (!f) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.contacts)) throw new Error('Invalid backup format');
+        await cloudAddMissingFromBackup(parsed);
+      } catch (e) { alert('Could not read this backup: ' + e.message); }
+    };
+    reader.readAsText(f);
+  };
+  input.click();
+}
 // Leads, sales, credits and pay plans imported for a teammate who had not signed up yet carry
 // that person's old id. Once they sign up with the same email, everything moves to their
 // account — run after every roster change on an Owner's or manager's device.
@@ -6935,6 +6997,7 @@ function renderWorkspaceSettings() {
         ${canManageUsers() ? `<div class="flex flex-wrap gap-2 mt-4" data-testid="backup-controls">
           <button data-testid="btn-export-backup" data-action="export-backup" class="btn btn-primary">${svgIcon('download')} Export Backup</button>
           <button data-testid="btn-import-backup" data-action="import-backup" class="btn btn-ghost">${svgIcon('upload')} Import Backup</button>
+          ${cloudMode() && canManageUsers() ? `<button data-testid="btn-import-missing" data-action="import-missing" class="btn btn-ghost" title="Adds leads, meetings, calls, estimates and more that this file has and the cloud does not. Changes nothing already here.">${svgIcon('upload')} Add what's missing from a backup</button>` : ''}
           ${cloudMode() && canEditTeam() ? `<button data-testid="btn-restore-owners" data-action="restore-owners" class="btn btn-ghost" title="Puts leads, sales and meetings back to the owner recorded in a web CRM backup">${svgIcon('users')} Restore lead owners from backup</button>` : ''}
           <button data-testid="btn-import-xlsx" data-action="import-xlsx" class="btn btn-ghost">${svgIcon('sheet')} Import contacts (.xlsx)</button>
           <button data-testid="btn-import-contacts-json" data-action="import-contacts-json" class="btn btn-ghost" title="For migrating a full export from another CRM">${svgIcon('upload')} Import contacts (.json)</button>
@@ -9177,6 +9240,7 @@ function bindSidebarHandlers() {
     if (a === 'new-lead')      el.addEventListener('click', () => { if (!['contacts','projects'].includes(ui.page)) navigateTo('contacts'); newContact(ui.page === 'projects'); });
     if (a === 'export-backup') el.addEventListener('click', exportBackup);
     if (a === 'import-backup') el.addEventListener('click', importBackup);
+    if (a === 'import-missing') el.addEventListener('click', addMissingFromBackup);
     if (a === 'restore-owners') el.addEventListener('click', restoreOwnersFromBackup);
     if (a === 'import-contacts-json') el.addEventListener('click', importContactsFromJson);
     if (a === 'import-xlsx')   el.addEventListener('click', importXlsx);
@@ -9831,6 +9895,7 @@ function bindPageHandlersRest() {
     const a = el.getAttribute('data-action');
     if (a === 'export-backup') el.addEventListener('click', exportBackup);
     if (a === 'import-backup') el.addEventListener('click', importBackup);
+    if (a === 'import-missing') el.addEventListener('click', addMissingFromBackup);
     if (a === 'restore-owners') el.addEventListener('click', restoreOwnersFromBackup);
     if (a === 'import-contacts-json') el.addEventListener('click', importContactsFromJson);
     if (a === 'import-xlsx') el.addEventListener('click', importXlsx);
