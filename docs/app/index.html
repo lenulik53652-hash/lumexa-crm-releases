@@ -1164,6 +1164,9 @@
     .logstrip { border:1px solid var(--crm-line); border-radius:12px; background:var(--crm-surface); padding:10px; margin-top:12px; }
     .logstrip textarea { width:100%; border:0; resize:none; font:inherit; font-size:14px; padding:4px 2px; background:transparent; outline:none; }
     .logstrip-row { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:6px; }
+    .chip.chip-ghost { background:transparent; border:1px dashed var(--crm-line); color:var(--crm-ash-dark); cursor:pointer; }
+    .chip.chip-ghost:hover { background:var(--crm-sand); }
+    button.chip { font:inherit; }
     .logchip { border:1px solid var(--crm-line); background:var(--crm-surface); border-radius:9px; padding:6px 11px; font-size:13px; font-weight:500; cursor:pointer; display:inline-flex; align-items:center; gap:5px; }
     .logchip:hover { background:var(--crm-sand); }
     .logchip.on { background:var(--crm-ink); color:var(--crm-paper-soft); border-color:var(--crm-ink); }
@@ -1338,7 +1341,7 @@
 
 const STORAGE_KEY = 'lumexa_crm_state_v2';
 const CLOUD_BASE_STORAGE_KEY = 'lumexa_crm_cloud_base_v1';
-const CRM_BUILD_BADGE = 'build 2026-11-17.4';
+const CRM_BUILD_BADGE = 'build 2026-11-17.5';
 /* ----------------- time zone -----------------
    Every day, week and month boundary and every displayed time follows the workspace time zone
    (Settings → Workspace), Miami by default, so the whole team sees one calendar wherever a
@@ -1923,6 +1926,9 @@ function normalizeProject(p, index = 0) {
   return {
     id: typeof raw.id === 'string' && raw.id ? raw.id : cryptoId(),
     name: String(raw.name || '').trim(),
+    // '' = the project belongs to the same brand as its lead; 'lumexa' / 'velum' pins it to a brand,
+    // so a Velum Design lead can carry a Lumexa project (it then shows on the Lumexa pipeline).
+    brand: raw.brand === 'lumexa' || raw.brand === 'velum' ? raw.brand : '',
     stage: normalizeStageId(raw.stage),
     labels: Array.isArray(raw.labels) ? raw.labels.filter(label => PROJECT_LABELS.includes(label)) : [],
     notes: typeof raw.notes === 'string' ? raw.notes : '',
@@ -1944,6 +1950,12 @@ function projectName(c, p) {
   return `Project ${i >= 0 ? i + 1 : 1}`;
 }
 function findProject(c, projectId) { return contactProjects(c).find(p => p.id === projectId) || null; }
+function projectBrand(c, p) { return (p && (p.brand === 'lumexa' || p.brand === 'velum')) ? p.brand : brandOf(c); }
+// Leads (any brand, within the current owner filter) that have at least one project on the brand
+// being viewed — the pipeline and project tracker are per brand by project, not by lead.
+function contactsWithProjectsIn(brand) {
+  return state.contacts.filter(c => leadOwnerMatches(c) && contactProjects(c).some(p => projectBrand(c, p) === brand));
+}
 function primaryProject(c) {
   const list = contactProjects(c);
   return list.find(p => p.stage !== 'Completed') || list[list.length - 1] || null;
@@ -2008,6 +2020,14 @@ function isResponseTouch(log) {
 }
 function isValuableConversation(log) {
   return isResponseTouch(log) && log?.valuableConversation === true;
+}
+// Whether what the quick-log strip is about to log counts as a response (an incoming message, or
+// an outgoing call that was picked up) — only those can be marked a valuable conversation.
+function quickLogIsResponse() {
+  const channel = ui.quickLogChannel || 'call';
+  if (channel === 'note') return false;
+  if (ui.quickLogIncoming) return true;
+  return channel === 'call' && ui.quickLogOutcome !== 'unavailable';
 }
 /* Partial payments. A sale's `amount` is the commissionable product value; `shipping` and
    `installation` are recorded beside it but earn no commission and never enter a sales total.
@@ -3912,9 +3932,40 @@ function releaseDownloadFor(r) {
   if (p === 'linux') return { url: r.linux?.url || r.deb?.url || '', label: 'Linux', hint: r.linux?.url ? 'Download the AppImage, mark it executable (right-click → Properties, or chmod +x) and run it.' : 'Download the .deb package and install it with your package manager.' };
   return { url: r.mac?.url || '', label: 'Mac', hint: 'Download, open the file and drag Lumexa CRM into Applications.' };
 }
+/* Over-the-air page updates (desktop 1.1.8+): the shell downloads a newer CRM page from the
+   releases site in the background and tells the page; it is used at the next launch anyway, the
+   banner just offers to reload now. Installer updates (below) stay for shell changes only. */
+function desktopPageUpdates() { return (typeof window !== 'undefined' && window.LUMEXA_DESKTOP && typeof window.LUMEXA_DESKTOP.onPageUpdate === 'function') ? window.LUMEXA_DESKTOP : null; }
+function desktopPageUpdatesInit() {
+  const d = desktopPageUpdates();
+  if (!d || cloud.pageUpdatesBound) return;
+  cloud.pageUpdatesBound = true;
+  d.onPageUpdate(info => { cloud.pageUpdate = info && info.build ? { build: String(info.build), notes: String(info.notes || '') } : null; renderUpdateBanner(); });
+  d.pageInfo().then(info => { cloud.pageInfo = info || null; if (info && info.pending) { cloud.pageUpdate = { build: String(info.pending), notes: '' }; renderUpdateBanner(); } }).catch(() => {});
+}
+async function desktopCheckPageUpdate() {
+  const d = desktopPageUpdates();
+  if (!d) return null;
+  try {
+    const r = await d.checkPageUpdate();
+    if (r && r.status === 'updated') { cloud.pageUpdate = { build: String(r.build), notes: String(r.notes || '') }; renderUpdateBanner(); toast(`Build ${r.build} is ready — reload to use it.`); }
+    else if (r && r.status === 'current') toast(`You have the latest build (${r.build}).`);
+    else if (r && r.status === 'shell-too-old') toast(`Build ${r.available} needs a newer installer (${r.minShell}+).`);
+    else toast('Could not check for a new build.');
+    return r;
+  } catch (e) { toast('Could not check for a new build.'); return null; }
+}
 function renderUpdateBanner() {
   const host = document.getElementById('update-banner');
   if (!host) return;
+  if (cloud.pageUpdate && cloud.pageUpdate.build) {
+    const u = cloud.pageUpdate;
+    host.innerHTML = `<div class="update-card" data-testid="page-update-banner"><div><strong>Build ${esc(u.build)} is ready</strong><small>${esc(u.notes || 'Reload to use it now; it also loads on its own next time the app opens.')}</small></div>
+      <div class="flex gap-2"><button type="button" class="btn btn-ember" data-action="apply-page-update">Reload now</button><button type="button" class="btn btn-ghost" data-action="dismiss-page-update">Later</button></div></div>`;
+    host.querySelectorAll('[data-action="apply-page-update"]').forEach(el => el.addEventListener('click', () => { const d = desktopPageUpdates(); if (d) d.applyPageUpdate(); }));
+    host.querySelectorAll('[data-action="dismiss-page-update"]').forEach(el => el.addEventListener('click', () => { cloud.pageUpdate = null; renderUpdateBanner(); }));
+    return;
+  }
   const r = cloud.latestRelease;
   if (!cloud.updateAvailable || !r) { host.innerHTML = ''; return; }
   const dl = releaseDownloadFor(r);
@@ -3923,6 +3974,7 @@ function renderUpdateBanner() {
   host.querySelectorAll('[data-action="snooze-update"]').forEach(el => el.addEventListener('click', () => { try { localStorage.setItem('lumexa_update_snoozed', r.version); } catch (e) { /* ignore */ } cloud.updateAvailable = false; renderUpdateBanner(); }));
 }
 function cloudStartUpdateChecks() {
+  desktopPageUpdatesInit();
   if (!appVersion() || cloud.updateTimer) return;
   cloudCheckForUpdate();
   cloud.updateTimer = setInterval(() => cloudCheckForUpdate(), 6 * 3600 * 1000);
@@ -5285,9 +5337,10 @@ function renderPage() {
 function projectBoardCards() {
   const needle = String(ui.search || '').trim().toLowerCase();
   const cards = [];
-  for (const c of visibleContacts()) {
-    if (!hasProjects(c)) continue;
+  const brand = activeBrand();
+  for (const c of contactsWithProjectsIn(brand)) {
     for (const p of contactProjects(c)) {
+      if (projectBrand(c, p) !== brand) continue;
       if (needle && ![c.name, c.company, c.pointOfContact, c.email, c.nextStep, p.name, p.notes].join(' ').toLowerCase().includes(needle)) continue;
       cards.push({ c, p });
     }
@@ -5311,6 +5364,10 @@ function renderProjectsCard(c) {
                   <input class="input proj-name" data-project-field="name" data-project-id="${esc(p.id)}" value="${esc(p.name)}" placeholder="Project ${i + 1} name — e.g. Lobby chandelier" aria-label="Project name" data-testid="project-name-${esc(p.id)}"/>
                   <select class="select" data-project-field="stage" data-project-id="${esc(p.id)}" aria-label="Project stage" ${i === 0 ? 'data-testid="contact-project-stage"' : ''}>
                     ${PROJECT_STAGES.map(stage => `<option value="${esc(stage.id)}" ${p.stage===stage.id?'selected':''}>${esc(stage.id)}</option>`).join('')}
+                  </select>
+                  <select class="select" data-project-field="brand" data-project-id="${esc(p.id)}" aria-label="Project brand" title="Which pipeline this project shows on" data-testid="project-brand-${esc(p.id)}">
+                    <option value="" ${!p.brand ? 'selected' : ''}>${esc(brandName(c))} (same as lead)</option>
+                    ${Object.values(BRANDS).map(b => `<option value="${esc(b.key)}" ${p.brand === b.key ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}
                   </select>
                   <button type="button" class="btn btn-ghost" data-action="remove-project" data-project-id="${esc(p.id)}" title="Remove this project" aria-label="Remove project">${svgIcon('trash')}</button>
                 </div>
@@ -5367,6 +5424,7 @@ function pipelineCardHtml(c, p) {
       <strong>${esc(projectName(c, p))}</strong>
       <small>${esc(sub)}${role ? ` · ${esc(role)}` : ''}${siblings > 1 ? ` · ${siblings} projects` : ''}</small>
     </button>
+    ${brandOf(c) !== activeBrand() ? `<div class="mt-1"><span class="chip chip-brand" data-testid="pcard-other-brand" title="The lead lives under ${esc(brandName(c))}; this project is on the ${esc(BRANDS[activeBrand()].name)} pipeline">${esc(brandName(c))} lead</span></div>` : ''}
     <div class="pcard-row">
       <span class="pcard-amount">${amount ? esc(amount) : '—'}</span>
       <span class="avatar" style="${userColor(owner) ? `background:${esc(userColor(owner))}` : ''}" title="${esc(userName(owner))}">${esc(initialsOf(userName(owner) === 'Unassigned' ? '?' : (rosterUser(owner)?.name || ui.currentUser?.name || '?')))}</span>
@@ -7005,7 +7063,7 @@ function renderWorkspaceSettings() {
           <button class="btn btn-ghost" data-action="account-email">Change login email</button>
           <button class="btn btn-ghost" data-action="account-password">Change password</button>
         </div>
-        ${appVersion() ? `<div class="mt-5 pt-4 border-t border-sand flex items-center justify-between gap-3 flex-wrap"><div><div class="label" style="margin:0">App version</div><div class="text-sm">Lumexa CRM ${esc(appVersion())}${cloud.latestRelease && cloud.latestRelease.version ? ` · latest ${esc(cloud.latestRelease.version)}` : ''}</div></div><div class="flex gap-2"><button class="btn btn-ghost" data-action="check-updates">Check for updates</button>${ui.currentUser?.role === 'owner' && CLOUD.releasesRepo ? `<a class="btn btn-ghost" href="https://github.com/${esc(CLOUD.releasesRepo)}/releases/new" target="_blank" rel="noopener" title="Publish a new version: drag the DMG onto the GitHub release page">${svgIcon('upload')} Publish a release</a>` : ''}</div></div>` : ''}
+        ${appVersion() ? `<div class="mt-5 pt-4 border-t border-sand flex items-center justify-between gap-3 flex-wrap"><div><div class="label" style="margin:0">App version</div><div class="text-sm">Lumexa CRM ${esc(appVersion())}${cloud.latestRelease && cloud.latestRelease.version ? ` · latest ${esc(cloud.latestRelease.version)}` : ''}${desktopPageUpdates() ? ` · page ${esc(CRM_BUILD_BADGE)}${cloud.pageInfo && cloud.pageInfo.source === 'bundled' ? ' (from the installer)' : ''}` : ''}</div>${desktopPageUpdates() ? '<div class="text-xs text-ash mt-1">The CRM page updates on its own: a new build loads the next time the app opens, or right away from the banner. A new installer is only needed when the app itself changes.</div>' : ''}</div><div class="flex gap-2"><button class="btn btn-ghost" data-action="check-updates">Check for updates</button>${ui.currentUser?.role === 'owner' && CLOUD.releasesRepo ? `<a class="btn btn-ghost" href="https://github.com/${esc(CLOUD.releasesRepo)}/releases/new" target="_blank" rel="noopener" title="Publish a new version: drag the DMG onto the GitHub release page">${svgIcon('upload')} Publish a release</a>` : ''}</div></div>` : ''}
       </section>` : ''}
       <section class="card p-6">
         <div class="text-[10px] mono uppercase tracking-[0.2em] text-ember">Your color</div>
@@ -8587,7 +8645,7 @@ function renderCommunicationEntry(call) {
         <div class="flex flex-wrap items-center gap-1">
           <span class="text-[10px] text-ash mono">${fmtDateTime(call.timestamp)}${call.duration ? ` · ${esc(call.duration)}` : ''}</span>
           ${callOutcomeLabel(call) ? `<span class="chip ${call.outcome==='picked_up'?'chip-paid':'chip-inactive'}">${esc(callOutcomeLabel(call))}</span>` : ''}
-          ${isValuableConversation(call) ? '<span class="chip chip-paid">Valuable</span>' : ''}
+          ${isResponseTouch(call) ? `<button type="button" class="chip ${isValuableConversation(call) ? 'chip-paid' : 'chip-ghost'}" data-action="toggle-valuable" data-id="${call.id}" data-testid="btn-toggle-valuable-${call.id}" title="${isValuableConversation(call) ? 'Marked as a valuable conversation — click to unmark' : 'Mark as a valuable conversation'}">${svgIcon('star')} ${isValuableConversation(call) ? 'Valuable' : 'Mark valuable'}</button>` : ''}
         </div>
         <div class="text-sm mt-1 leading-relaxed">${esc(call.notes || 'No note')}</div>
       </div>
@@ -8735,6 +8793,7 @@ function drawerHeadHtml(c, moreLoggingHtml) {
             <span class="logstrip-sep"></span>
             ${(ui.quickLogChannel || 'call') !== 'note' ? `<button type="button" class="logchip sub ${ui.quickLogIncoming ? 'on' : ''}" data-quick-incoming title="They contacted us">${svgIcon('arrow-in')} Incoming</button>` : ''}
             ${(ui.quickLogChannel || 'call') === 'call' && !ui.quickLogIncoming ? `<button type="button" class="logchip sub ${ui.quickLogOutcome === 'unavailable' ? 'on' : ''}" data-quick-outcome="${ui.quickLogOutcome === 'unavailable' ? 'picked_up' : 'unavailable'}" title="Nobody picked up — otherwise the call counts as picked up">${svgIcon('phone')} Unavailable</button>` : ''}
+            ${quickLogIsResponse() ? `<button type="button" class="logchip sub ${ui.quickLogValuable ? 'on' : ''}" data-quick-valuable data-testid="btn-quick-valuable" title="Count this separately: the exchange produced useful information, progress or a clear outcome">${svgIcon('star')} Valuable</button>` : ''}
             <button type="button" class="logchip sub ${ui.quickLogWhenOpen ? 'on' : ''}" data-quick-when-toggle title="Log for an earlier time">${svgIcon('clock')} ${ui.quickLogWhenOpen ? 'Now' : 'Earlier…'}</button>
             <button type="button" class="btn btn-primary ml-auto" data-action="quick-log" data-testid="btn-quick-log">Log it</button>
           </div>
@@ -9947,7 +10006,7 @@ function bindPageHandlers() {
       return false;
     } });
   }));
-  document.querySelectorAll('[data-action="check-updates"]').forEach(el => el.addEventListener('click', () => cloudCheckForUpdate(true)));
+  document.querySelectorAll('[data-action="check-updates"]').forEach(el => el.addEventListener('click', async () => { if (desktopPageUpdates()) { const r = await desktopCheckPageUpdate(); if (r && (r.status === 'updated' || r.status === 'current')) { cloudCheckForUpdate(false); return; } } cloudCheckForUpdate(true); }));
   document.querySelectorAll('[data-action="refresh-team"]').forEach(el => el.addEventListener('click', async () => { await cloudRefreshRoster(true); await loadTeamData(); toast('Team list refreshed.'); }));
   document.querySelectorAll('[data-action="edit-team-user"]').forEach(el => el.addEventListener('click', () => {
     const id = el.getAttribute('data-id');
@@ -10323,6 +10382,7 @@ function bindDrawerHandlers() {
   document.querySelectorAll('[data-pick-project]').forEach(el => el.addEventListener('click', () => { ui.drawerProjectId = el.getAttribute('data-pick-project'); renderContactDrawer(); }));
   document.querySelectorAll('[data-quick-incoming]').forEach(el => el.addEventListener('click', () => { ui.quickLogIncoming = !ui.quickLogIncoming; renderContactDrawer(); }));
   document.querySelectorAll('[data-quick-outcome]').forEach(el => el.addEventListener('click', () => { ui.quickLogOutcome = el.getAttribute('data-quick-outcome'); renderContactDrawer(); }));
+  document.querySelectorAll('[data-quick-valuable]').forEach(el => el.addEventListener('click', () => { ui.quickLogValuable = !ui.quickLogValuable; renderContactDrawer(); }));
   document.querySelectorAll('[data-quick-when-toggle]').forEach(el => el.addEventListener('click', () => { ui.quickLogWhenOpen = !ui.quickLogWhenOpen; if (!ui.quickLogWhenOpen) { ui.quickLogWhen = ''; ui.quickLogDuration = ''; } renderContactDrawer(); }));
   document.querySelectorAll('[data-quick-when]').forEach(el => el.addEventListener('change', () => { ui.quickLogWhen = el.value; }));
   document.querySelectorAll('[data-quick-duration]').forEach(el => el.addEventListener('input', () => { ui.quickLogDuration = el.value; }));
@@ -10339,10 +10399,10 @@ function bindDrawerHandlers() {
     } else {
       const direction = ui.quickLogIncoming ? 'incoming' : 'outgoing';
       c.calls = c.calls || [];
-      c.calls.push({ id: cryptoId(), channel, direction, outcome: channel === 'call' && direction === 'outgoing' ? (ui.quickLogOutcome === 'unavailable' ? 'unavailable' : 'picked_up') : '', timestamp: stamp, duration: ui.quickLogWhenOpen ? String(ui.quickLogDuration || '') : '', notes, valuableConversation: false, projectId: (drawerProject(c) || {}).id || '' });
+      c.calls.push({ id: cryptoId(), channel, direction, outcome: channel === 'call' && direction === 'outgoing' ? (ui.quickLogOutcome === 'unavailable' ? 'unavailable' : 'picked_up') : '', timestamp: stamp, duration: ui.quickLogWhenOpen ? String(ui.quickLogDuration || '') : '', notes, valuableConversation: quickLogIsResponse() && ui.quickLogValuable === true, projectId: (drawerProject(c) || {}).id || '' });
       invalidateNoResponseResult();
     }
-    ui.quickLogNotes = ''; ui.quickLogIncoming = false; ui.quickLogOutcome = 'picked_up'; ui.quickLogWhenOpen = false; ui.quickLogWhen = ''; ui.quickLogDuration = '';
+    ui.quickLogNotes = ''; ui.quickLogIncoming = false; ui.quickLogOutcome = 'picked_up'; ui.quickLogValuable = false; ui.quickLogWhenOpen = false; ui.quickLogWhen = ''; ui.quickLogDuration = '';
     saveStateNow(); renderContactDrawer();
     if (['contacts','projects','actions','dashboard'].includes(ui.page)) renderPage();
     toast(channel === 'note' ? 'Note saved.' : `${channel === 'whatsapp' ? 'WhatsApp' : (channel === 'email' ? 'Email' : 'Call')} logged.`);
@@ -10378,14 +10438,15 @@ function bindDrawerHandlers() {
     const apply = () => {
       const p = findProject(c, el.getAttribute('data-project-id'));
       const field = el.getAttribute('data-project-field');
-      if (!p || !['name','stage','notes','nextStep','nextActionDue'].includes(field)) return;
+      if (!p || !['name','stage','brand','notes','nextStep','nextActionDue'].includes(field)) return;
       if (field === 'stage' && !PROJECT_STAGES.some(stage => stage.id === el.value)) return;
+      if (field === 'brand' && !(el.value === '' || BRANDS[el.value])) return;
       if (p[field] === el.value) return;
       p[field] = field === 'name' ? el.value.trim() : el.value;
       p.updatedAt = new Date().toISOString();
       syncProjectMirror(c);
       saveState();
-      if (field === 'stage') { renderContactDrawer(); if (ui.page === 'projects') renderPage(); }
+      if (field === 'stage' || field === 'brand') { renderContactDrawer(); if (ui.page === 'projects') renderPage(); }
       else if (['projects','contacts','actions','dashboard','calendar'].includes(ui.page)) renderPage();
     };
     el.addEventListener('change', apply);
@@ -10612,6 +10673,14 @@ function bindDrawerHandlers() {
   });
 
   // Communication log (calls / emails / WhatsApp)
+  document.querySelectorAll('[data-action="toggle-valuable"]').forEach(el => el.addEventListener('click', () => {
+    const entry = (c.calls || []).find(x => x.id === el.getAttribute('data-id'));
+    if (!entry || !isResponseTouch(entry)) return;
+    entry.valuableConversation = !(entry.valuableConversation === true);
+    saveState(); renderContactDrawer();
+    if (['dashboard', 'reports', 'actions'].includes(ui.page)) renderPage();
+    toast(entry.valuableConversation ? 'Marked as a valuable conversation.' : 'No longer marked as valuable.');
+  }));
   document.querySelectorAll('[data-action="quick-call"]').forEach(el => {
     el.addEventListener('click', () => {
       const outcome = el.getAttribute('data-outcome');
@@ -11431,8 +11500,10 @@ function runTask(id, options = {}) {
 
   if (t.kind === 'project-tracker') {
     const projects = [];
-    for (const c of visibleContacts()) {
-      if (!isProjectLead(c)) continue;
+    const seen = new Set();
+    for (const c of [...visibleContacts().filter(isProjectLead), ...contactsWithProjectsIn(activeBrand())]) {
+      if (seen.has(c.id)) continue;
+      seen.add(c.id);
       const activities = projectActivities(c);
       projects.push({
         id: c.id,
@@ -12291,6 +12362,7 @@ function svgIcon(name) {
   const stroke = 'stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"';
   const wrap = (p) => `<svg width="16" height="16" viewBox="0 0 24 24" ${stroke}>${p}</svg>`;
   switch (name) {
+    case 'star':  return wrap(`<path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9L12 16.9l-5.3 2.8 1.1-5.9-4.3-4.1 5.9-.8z"/>`);
     case 'grid':  return wrap(`<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>`);
     case 'folder': return wrap(`<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>`);
     case 'columns': return wrap(`<rect x="3" y="4" width="5" height="16" rx="1"/><rect x="10" y="4" width="5" height="16" rx="1"/><rect x="17" y="4" width="4" height="16" rx="1"/>`);
