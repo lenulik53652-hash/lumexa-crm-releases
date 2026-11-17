@@ -1353,7 +1353,7 @@
 
 const STORAGE_KEY = 'lumexa_crm_state_v2';
 const CLOUD_BASE_STORAGE_KEY = 'lumexa_crm_cloud_base_v1';
-const CRM_BUILD_BADGE = 'build 2026-11-17.9';
+const CRM_BUILD_BADGE = 'build 2026-11-17.10';
 /* ----------------- time zone -----------------
    Every day, week and month boundary and every displayed time follows the workspace time zone
    (Settings → Workspace), Miami by default, so the whole team sees one calendar wherever a
@@ -3000,6 +3000,11 @@ function mergeWithDefaults(incoming) {
         id: meeting?.id || cryptoId(),
         createdByUserId: typeof meeting?.createdByUserId === 'string' ? meeting.createdByUserId : '',
         type: MEETING_TYPES[meeting?.type] ? meeting.type : '',
+        outcome: meeting?.outcome === 'missed' ? 'missed' : (meeting?.completed || meeting?.outcome === 'completed' ? 'completed' : ''),
+        completed: meeting?.outcome === 'missed' ? false : !!(meeting?.completed || meeting?.outcome === 'completed'),
+        missReason: meeting?.outcome === 'missed' && typeof meeting?.missReason === 'string' ? meeting.missReason : '',
+        missNote: meeting?.outcome === 'missed' && typeof meeting?.missNote === 'string' ? meeting.missNote : '',
+        reschedules: Array.isArray(meeting?.reschedules) ? meeting.reschedules.filter(r => r && typeof r === 'object') : [],
       })) : [];
       c.sales = Array.isArray(c.sales) ? c.sales.map(sale => {
         const status = sale?.status === 'paid' ? 'paid' : (sale?.status === 'partial' ? 'partial' : (sale?.status === 'declined' ? 'declined' : (sale?.status === 'not_selected' ? 'not_selected' : 'pending')));
@@ -3296,7 +3301,7 @@ function computeTomorrowPriorities(asOfIso) {
 
     // Bonuses
     if (c.nextStep && c.nextStep.trim()) score += 20;
-    const hasUpcomingMeeting = (c.meetings || []).some(m => !m.completed && m.scheduledOn && new Date(m.scheduledOn).getTime() > asOfMs);
+    const hasUpcomingMeeting = (c.meetings || []).some(m => meetingUpcoming(m) && m.scheduledOn && new Date(m.scheduledOn).getTime() > asOfMs);
     if (hasUpcomingMeeting) score += 30;
 
     // Build reason
@@ -5298,6 +5303,36 @@ function meetingTypeChip(m) {
   return t ? `<span class="chip ${t.chip}" data-meeting-type="${esc(m.type)}">${t.label}</span>` : '';
 }
 function meetingTypeLabel(m) { const t = MEETING_TYPES[m && m.type]; return t ? t.label : ''; }
+/* Meeting outcomes. `completed` stays the boolean every report and export already reads;
+   `outcome` adds the third state: '' (still to happen) · 'completed' · 'missed' (no-show, no
+   Zoom, cancelled…). A missed meeting can be rescheduled in place: the same record moves to the
+   new date and keeps the old one in `reschedules`, so it stays ONE meeting — booked once, paid
+   once. A genuinely new meeting is scheduled beside it as usual. */
+const MEETING_MISS_REASONS = { no_show: 'No-show', client_cancelled: 'Client cancelled', technical: 'Technical problem (no Zoom / call)', our_side: 'Our side could not make it', other: 'Other' };
+function meetingOutcome(m) { return m?.outcome === 'missed' ? 'missed' : (m?.completed || m?.outcome === 'completed' ? 'completed' : ''); }
+function meetingMissed(m) { return meetingOutcome(m) === 'missed'; }
+function meetingUpcoming(m) { return meetingOutcome(m) === ''; }
+function setMeetingOutcome(m, outcome, note) {
+  m.outcome = outcome === 'missed' || outcome === 'completed' ? outcome : '';
+  m.completed = m.outcome === 'completed';
+  if (m.outcome === 'missed') { if (typeof note === 'object' && note) { m.missReason = MEETING_MISS_REASONS[note.reason] ? note.reason : 'other'; m.missNote = String(note.note || '').trim(); } }
+  else { m.missReason = ''; m.missNote = ''; }
+}
+function meetingReschedules(m) { return Array.isArray(m?.reschedules) ? m.reschedules : []; }
+// Same meeting, new date: the old date goes into the history, the meeting is upcoming again.
+function rescheduleMeeting(m, newScheduledOn, note) {
+  if (!m || !newScheduledOn) return false;
+  m.reschedules = meetingReschedules(m).slice();
+  m.reschedules.push({ from: m.scheduledOn || '', to: newScheduledOn, at: new Date().toISOString(), reason: meetingMissed(m) ? (m.missReason || 'other') : '', note: String(note || m.missNote || '').trim(), byUserId: ui.currentUser?.id || '' });
+  m.scheduledOn = newScheduledOn;
+  setMeetingOutcome(m, '');
+  return true;
+}
+function meetingMissLabel(m) { return `${MEETING_MISS_REASONS[m?.missReason] || 'Did not happen'}${m?.missNote ? ` · ${m.missNote}` : ''}`; }
+function meetingOutcomeLabel(m) {
+  const o = meetingOutcome(m);
+  return o === 'completed' ? 'Completed' : (o === 'missed' ? `Did not happen · ${meetingMissLabel(m)}` : 'Scheduled');
+}
 function meetingTypeOptions(selected) { return Object.entries(MEETING_TYPES).map(([k, t]) => `<option value="${k}" ${selected === k ? 'selected' : ''}>${t.label}</option>`).join(''); }
 function initialsOf(name) {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
@@ -5772,7 +5807,7 @@ function calendarEntries() {
       entries.push({
         id:`meeting-${c.id}-${meeting.id}`, type:'meeting', date:localDateKey(meeting.scheduledOn), time,
         title:`Meeting · ${c.name || 'Contact'}`, notes:meeting.agenda || 'Meeting', contactId:c.id, meetingType: MEETING_TYPES[meeting.type] ? meeting.type : '',
-        completed:!!meeting.completed,
+        completed:!!meeting.completed, missed: meetingMissed(meeting),
       });
     }
   }
@@ -5820,7 +5855,7 @@ function renderCalendarEvent(entry, compact = false) {
     ? `data-calendar-contact="${esc(entry.contactId)}"`
     : `data-calendar-custom="${esc(entry.eventId)}"`;
   return `<button class="w-full text-left border rounded px-2 py-1 ${compact ? 'text-[10px]' : 'text-xs'} leading-tight hover:opacity-80" style="${calendarEventStyle(entry.type)}" ${action} title="${esc(entry.notes || entry.title)}">
-    <span class="calendar-type-label">${esc(calendarTypeLabel(entry.type))}</span>${entry.time ? `<span class="mono opacity-70 mr-1">${esc(entry.time)}</span>` : ''}${entry.meetingType ? `<span class="chip ${MEETING_TYPES[entry.meetingType].chip} mr-1" data-meeting-type="${esc(entry.meetingType)}" style="font-size:9px;padding:0 6px">${MEETING_TYPES[entry.meetingType].label}</span>` : ''}${esc(calendarDisplayTitle(entry))}${entry.completed ? ' ✓' : ''}
+    <span class="calendar-type-label">${esc(calendarTypeLabel(entry.type))}</span>${entry.time ? `<span class="mono opacity-70 mr-1">${esc(entry.time)}</span>` : ''}${entry.meetingType ? `<span class="chip ${MEETING_TYPES[entry.meetingType].chip} mr-1" data-meeting-type="${esc(entry.meetingType)}" style="font-size:9px;padding:0 6px">${MEETING_TYPES[entry.meetingType].label}</span>` : ''}${esc(calendarDisplayTitle(entry))}${entry.completed ? ' ✓' : (entry.missed ? ' ✕' : '')}
   </button>`;
 }
 
@@ -5903,7 +5938,7 @@ function renderCalendar() {
           const meta = nextActionDueMeta(entry.date);
           return `<div class="py-3 flex items-center gap-4">
             <div class="w-28 shrink-0"><div class="text-sm mono ${entry.date < today ? 'text-ember' : ''}">${esc(fmtDate(`${entry.date}T12:00:00`))}</div>${entry.time ? `<div class="text-xs text-ash mono mt-0.5">${esc(entry.time)}</div>` : (entry.date < today ? `<div class="text-[10px] text-ember mt-0.5">${esc(meta?.label || 'Overdue')}</div>` : '')}</div>
-            <div class="flex-1 min-w-0"><div class="font-semibold">${esc(calendarDisplayTitle(entry))}${entry.completed ? ' ✓' : ''}</div><div class="text-xs text-ash mt-0.5 truncate">${esc(entry.notes || 'No note')}</div></div>
+            <div class="flex-1 min-w-0"><div class="font-semibold">${esc(calendarDisplayTitle(entry))}${entry.completed ? ' ✓' : (entry.missed ? ' ✕ did not happen' : '')}</div><div class="text-xs text-ash mt-0.5 truncate">${esc(entry.notes || 'No note')}</div></div>
             <span class="border rounded px-2 py-1 text-[10px] mono uppercase inline-flex items-center gap-1" style="${calendarEventStyle(entry.type)}">${calendarTypeIcon(entry.type)}${esc(calendarTypeLabel(entry.type))}</span>
             ${entry.contactId ? `<button class="btn btn-ghost" data-calendar-contact="${esc(entry.contactId)}">Open</button>` : `<button class="btn btn-ghost" data-calendar-custom="${esc(entry.eventId)}">Edit</button><button class="btn btn-ghost" data-calendar-delete="${esc(entry.eventId)}" aria-label="Delete reminder">${svgIcon('trash')}</button>`}
           </div>`;
@@ -5944,7 +5979,7 @@ function renderDashboard() {
   const contacts = visibleContacts();
   const todayKey = localDateKey(new Date());
   const byTime = (a, b) => String(a.scheduledOn || '').localeCompare(String(b.scheduledOn || ''));
-  const meetings = allMeetings().filter(m => m.contactBrand === activeBrand() && !m.completed && m.scheduledOn);
+  const meetings = allMeetings().filter(m => m.contactBrand === activeBrand() && meetingUpcoming(m) && m.scheduledOn);
   const todayMeetings = meetings.filter(m => localDateKey(m.scheduledOn) === todayKey).sort(byTime);
   const upcoming = meetings.filter(m => localDateKey(m.scheduledOn) > todayKey).sort(byTime).slice(0, 5);
   const nextActions = [
@@ -7577,6 +7612,7 @@ function projectActivities(c) {
       timestamp,
       detail: meeting.agenda || '',
       completed: !!meeting.completed,
+      missed: meetingMissed(meeting),
     });
   }
   return activities.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
@@ -7584,7 +7620,7 @@ function projectActivities(c) {
 
 function projectActivityLabel(activity) {
   if (activity.kind === 'meeting') {
-    return `Meeting ${activity.completed ? 'completed' : 'scheduled'}${activity.detail ? ` · ${activity.detail}` : ''}`;
+    return `Meeting ${activity.completed ? 'completed' : (activity.missed ? 'did not happen' : 'scheduled')}${activity.detail ? ` · ${activity.detail}` : ''}`;
   }
   const channel = activity.channel === 'email' ? 'Email' : (activity.channel === 'whatsapp' ? 'WhatsApp' : 'Call');
   return `${channel} · ${communicationTouchLabel(activity)}${activity.detail ? ` · ${activity.detail}` : ''}`;
@@ -7845,7 +7881,7 @@ function leadConversationScore(c, incoming, startIso, endIso) {
   const openValue = estimateSets(openSales).reduce((sum, set) => sum + estimateSetValue(set), 0);
   if (openSales.length) { score += 25 + Math.min(25, openValue / 2000); reasons.push(`${fmtMoney(openValue)} in open estimates`); }
   const periodDay = startIso.slice(0,10);
-  const meetingBooked = (c.meetings || []).some(m => m && !m.completed && String(m.scheduledOn || '').slice(0,10) >= periodDay);
+  const meetingBooked = (c.meetings || []).some(m => m && meetingUpcoming(m) && String(m.scheduledOn || '').slice(0,10) >= periodDay);
   if (meetingBooked) { score += 20; reasons.push('meeting on the calendar'); }
   if (String(c.nextStep || '').trim()) { score += 10; reasons.push('next step set'); }
   if (incoming.length > 1) { score += Math.min(20, (incoming.length - 1) * 5); reasons.push(`reached in ${incoming.length}×`); }
@@ -8209,8 +8245,9 @@ function renderWeeklyReport() {
   });
   const scheduledThisWeek = allM.filter(m => (m.scheduledOn || '') >= startIso && (m.scheduledOn || '') <= endIso);
   const doneThisWeek = scheduledThisWeek.filter(m => m.completed);
-  const upcomingThisWeek = scheduledThisWeek.filter(m => !m.completed && new Date(m.scheduledOn) >= new Date());
-  const inProgressThisWeek = scheduledThisWeek.filter(m => !m.completed && new Date(m.scheduledOn) < new Date());
+  const upcomingThisWeek = scheduledThisWeek.filter(m => meetingUpcoming(m) && new Date(m.scheduledOn) >= new Date());
+  const inProgressThisWeek = scheduledThisWeek.filter(m => meetingUpcoming(m) && new Date(m.scheduledOn) < new Date());
+  const missedThisWeek = scheduledThisWeek.filter(meetingMissed);
 
   // Engagement: pool contacts with any activity (meeting or comm) during the week
   const poolIds = new Set(pool.map(c => c.id));
@@ -8323,7 +8360,7 @@ function renderWeeklyReport() {
           <div class="card p-3"><div class="text-[10px] mono uppercase tracking-[0.2em] text-ash">Hot</div><div class="serif text-3xl mt-1">${hot.length}</div><div class="text-xs text-ash">${pct(hot.length)}% of funnel</div></div>
           <div class="card p-3"><div class="text-[10px] mono uppercase tracking-[0.2em] text-ash">Warm</div><div class="serif text-3xl mt-1">${warm.length}</div><div class="text-xs text-ash">${pct(warm.length)}% — nurture</div></div>
           <div class="card p-3"><div class="text-[10px] mono uppercase tracking-[0.2em] text-ash">Vendor apps</div><div class="serif text-3xl mt-1">${vendors.length}</div><div class="text-xs text-ash">commercial track</div></div>
-          <div class="card p-3"><div class="text-[10px] mono uppercase tracking-[0.2em] text-ash">Meetings (week)</div><div class="serif text-3xl mt-1">${bookedThisWeek.length}</div><div class="text-xs text-ash">${doneThisWeek.length} done · ${upcomingThisWeek.length} upcoming</div></div>
+          <div class="card p-3"><div class="text-[10px] mono uppercase tracking-[0.2em] text-ash">Meetings (week)</div><div class="serif text-3xl mt-1">${bookedThisWeek.length}</div><div class="text-xs text-ash">${doneThisWeek.length} done · ${upcomingThisWeek.length} upcoming${missedThisWeek.length ? ` · ${missedThisWeek.length} did not happen` : ''}</div></div>
         </div>
         <div class="report-comparison-grid mt-3">
           ${reportComparisonCard('Reach-outs', shownMetrics.touchpoints, previousMetrics.touchpoints)}
@@ -9128,7 +9165,7 @@ function renderContactDrawer() {
       <section data-drawer-pane="lead" class="px-7 py-5 border-b border-sand">
         <div class="flex items-center justify-between gap-3">
           <h3 class="serif text-2xl">Meetings</h3>
-          <span class="text-xs text-ash">${meetings.length ? `${meetings.filter(m => !m.completed).length} upcoming` : 'none yet'}</span>
+          <span class="text-xs text-ash">${meetings.length ? `${meetings.filter(meetingUpcoming).length} upcoming${meetings.some(meetingMissed) ? ` · ${meetings.filter(meetingMissed).length} did not happen` : ''}` : 'none yet'}</span>
         </div>
         <div class="meeting-form">
           <input id="new-meeting-when" type="datetime-local" class="input" data-testid="new-meeting-when" aria-label="Scheduled on"/>
@@ -9164,10 +9201,11 @@ function renderContactDrawer() {
                       </div>
                       <div class="col-span-2">
                         <div class="label">Status</div>
-                        <label class="inline-flex items-center gap-2 mt-2">
-                          <input type="checkbox" data-meeting-edit-field="completed" data-id="${m.id}" ${m.completed?'checked':''}/>
-                          <span class="text-sm">Completed</span>
-                        </label>
+                        <select class="input" data-meeting-edit-field="outcome" data-id="${m.id}">
+                          <option value="" ${meetingOutcome(m) === '' ? 'selected' : ''}>Scheduled</option>
+                          <option value="completed" ${meetingOutcome(m) === 'completed' ? 'selected' : ''}>Completed</option>
+                          <option value="missed" ${meetingOutcome(m) === 'missed' ? 'selected' : ''}>Did not happen</option>
+                        </select>
                       </div>
                       <div class="col-span-12">
                         <div class="label">Agenda</div>
@@ -9185,14 +9223,14 @@ function renderContactDrawer() {
                 <div class="min-w-0">
                   <div class="text-sm font-semibold flex items-center gap-2 flex-wrap">${esc(m.agenda || 'Meeting')}${meetingTypeChip(m)}</div>
                   <div class="text-xs text-ash mono">
-                    Scheduled on ${fmtDateTime(m.scheduledOn)}${m.createdAt ? ` · booked ${fmtDate(m.createdAt)}` : ''}
+                    Scheduled on ${fmtDateTime(m.scheduledOn)}${m.createdAt ? ` · booked ${fmtDate(m.createdAt)}` : ''}${meetingReschedules(m).length ? ` · rescheduled ${meetingReschedules(m).length}× <span title="${esc(meetingReschedules(m).map(r => `${fmtDateTime(r.from)} → ${fmtDateTime(r.to)}${r.reason ? ` (${MEETING_MISS_REASONS[r.reason] || r.reason})` : ''}`).join('\n'))}">(was ${esc(fmtDateTime(meetingReschedules(m)[meetingReschedules(m).length - 1].from))})</span>` : ''}
                   </div>
+                  ${meetingMissed(m) ? `<div class="text-xs mt-1"><span class="chip chip-inactive" data-testid="meeting-missed-${m.id}">Did not happen</span> <span class="text-ash">${esc(meetingMissLabel(m))}</span></div>` : (meetingOutcome(m) === 'completed' ? `<div class="text-xs mt-1"><span class="chip chip-paid" data-testid="meeting-done-${m.id}">Completed</span></div>` : '')}
                 </div>
-                <div class="flex items-center gap-2 shrink-0">
-                  <label class="text-xs inline-flex items-center gap-1">
-                    <input type="checkbox" data-action="toggle-meeting" data-id="${m.id}" ${m.completed?'checked':''} data-testid="meeting-complete-${m.id}"/>
-                    Completed
-                  </label>
+                <div class="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+                  ${meetingOutcome(m) === '' ? `<button class="btn btn-ghost" data-action="meeting-happened" data-id="${m.id}" data-testid="meeting-complete-${m.id}" title="The meeting took place">Happened</button><button class="btn btn-ghost" data-action="meeting-missed" data-id="${m.id}" data-testid="meeting-missed-btn-${m.id}" title="No-show, no Zoom, cancelled…">Didn’t happen</button>` : ''}
+                  ${meetingMissed(m) ? `<button class="btn btn-primary" data-action="meeting-reschedule" data-id="${m.id}" data-testid="meeting-reschedule-${m.id}" title="Same meeting, new date — counts once">Reschedule</button>` : ''}
+                  ${meetingOutcome(m) !== '' ? `<button class="btn btn-ghost" data-action="meeting-reset" data-id="${m.id}" data-testid="meeting-reset-${m.id}" title="Back to scheduled">Undo</button>` : ''}
                   <button class="btn btn-ghost" data-action="edit-meeting" data-id="${m.id}" data-testid="btn-edit-meeting-${m.id}" title="Edit">${svgIcon('pencil')}</button>
                   <button class="btn btn-danger" data-action="delete-meeting" data-id="${m.id}">${svgIcon('trash')}</button>
                 </div>
@@ -10803,13 +10841,55 @@ function bindDrawerHandlers() {
     saveStateNow(); renderContactDrawer();
   });
 
-  // Toggle / delete meetings
-  document.querySelectorAll('[data-action="toggle-meeting"]').forEach(el => {
-    el.addEventListener('change', () => {
-      const m = (c.meetings||[]).find(x => x.id === el.getAttribute('data-id'));
-      if (m) { m.completed = el.checked; saveState(); renderContactDrawer(); }
+  // Outcome / reschedule / delete meetings
+  const meetingById = (el) => (c.meetings || []).find(x => x.id === el.getAttribute('data-id'));
+  document.querySelectorAll('[data-action="meeting-happened"]').forEach(el => el.addEventListener('click', () => {
+    const m = meetingById(el); if (!m) return;
+    setMeetingOutcome(m, 'completed'); saveState(); renderContactDrawer(); toast('Meeting marked as completed.');
+  }));
+  document.querySelectorAll('[data-action="meeting-reset"]').forEach(el => el.addEventListener('click', () => {
+    const m = meetingById(el); if (!m) return;
+    setMeetingOutcome(m, ''); saveState(); renderContactDrawer();
+  }));
+  document.querySelectorAll('[data-action="meeting-missed"]').forEach(el => el.addEventListener('click', () => {
+    const m = meetingById(el); if (!m) return;
+    openModal({
+      title: 'The meeting did not happen',
+      subtitle: 'Say why, and reschedule it right away if you already have a new time. Rescheduling keeps it as the same meeting — it counts once for pay. To book a separate new meeting, use Schedule above.',
+      fields: [
+        { key:'reason', label:'What happened', type:'select', value:'no_show', options: Object.entries(MEETING_MISS_REASONS).map(([value, label]) => ({ value, label })) },
+        { key:'note', label:'Note (optional)', type:'text', placeholder:'e.g. client stuck in traffic, Zoom link failed' },
+        { key:'when', label:'Rescheduled to (optional)', type:'datetime-local', value:'', help:'Leave empty to decide later — you can reschedule from the meeting row at any time.' },
+      ],
+      submitLabel: 'Save',
+      onSubmit: (v) => {
+        setMeetingOutcome(m, 'missed', { reason: v.reason, note: v.note });
+        let msg = 'Meeting marked as not happened.';
+        if (v.when) { const d = parseLocalInput(v.when); if (isNaN(d)) { toast('Check the new date and time.'); return false; } rescheduleMeeting(m, d.toISOString(), v.note); msg = `Meeting rescheduled to ${fmtDateTime(m.scheduledOn)} — still counts as one meeting.`; }
+        saveState(); renderContactDrawer(); if (['dashboard', 'calendar', 'reports'].includes(ui.page)) renderPage();
+        toast(msg);
+      },
     });
-  });
+  }));
+  document.querySelectorAll('[data-action="meeting-reschedule"]').forEach(el => el.addEventListener('click', () => {
+    const m = meetingById(el); if (!m) return;
+    openModal({
+      title: 'Reschedule this meeting',
+      subtitle: `Same meeting, new date${m.scheduledOn ? ` (was ${fmtDateTime(m.scheduledOn)})` : ''}. It stays one meeting — booked once, paid once. A separate new meeting is scheduled from the form above.`,
+      fields: [
+        { key:'when', label:'New date & time', type:'datetime-local', value:'' },
+        { key:'note', label:'Note (optional)', type:'text', value: m.missNote || '', placeholder:'e.g. client asked for the following week' },
+      ],
+      submitLabel: 'Reschedule',
+      onSubmit: (v) => {
+        if (!v.when) { toast('Pick the new date and time.'); return false; }
+        const d = parseLocalInput(v.when); if (isNaN(d)) { toast('Check the new date and time.'); return false; }
+        rescheduleMeeting(m, d.toISOString(), v.note);
+        saveState(); renderContactDrawer(); if (['dashboard', 'calendar', 'reports'].includes(ui.page)) renderPage();
+        toast(`Meeting rescheduled to ${fmtDateTime(m.scheduledOn)} — still counts as one meeting.`);
+      },
+    });
+  }));
   document.querySelectorAll('[data-action="delete-meeting"]').forEach(el => {
     el.addEventListener('click', () => { if (!confirm('Delete this meeting?')) return; recordDeletion(el.getAttribute('data-id')); c.meetings = (c.meetings||[]).filter(x => x.id !== el.getAttribute('data-id')); saveState(); renderContactDrawer(); });
   });
@@ -10827,8 +10907,8 @@ function bindDrawerHandlers() {
       if (!m) return;
       document.querySelectorAll(`[data-meeting-edit-field][data-id="${id}"]`).forEach(inp => {
         const key = inp.getAttribute('data-meeting-edit-field');
-        if (key === 'completed') {
-          m.completed = inp.checked;
+        if (key === 'outcome') {
+          if (inp.value !== meetingOutcome(m)) setMeetingOutcome(m, inp.value, inp.value === 'missed' ? { reason: m.missReason || 'other', note: m.missNote || '' } : null);
         } else if (key === 'scheduledOn' || key === 'createdAt') {
           m[key] = inp.value ? parseLocalInput(inp.value).toISOString() : '';
         } else {
@@ -12080,6 +12160,8 @@ function exportContactsXlsx() {
       'Booked on': meeting.createdAt || '',
       Agenda: meeting.agenda || '',
       Completed: meeting.completed ? 'Yes' : 'No',
+      Outcome: meetingOutcomeLabel(meeting),
+      'Rescheduled times': meetingReschedules(meeting).length,
     });
     for (const sale of (c.sales || [])) sales.push({
       ...contactBase,
@@ -12164,7 +12246,7 @@ function campaignSalesEvidence(contact) {
 }
 function campaignMeetingEvidence(contact) {
   return (contact.meetings || []).map(meeting =>
-    `${fmtDateTime(meeting.scheduledOn || meeting.createdAt)} — ${meeting.completed ? 'Completed' : 'Scheduled'}${meeting.agenda ? ` · ${meeting.agenda}` : ''}`
+    `${fmtDateTime(meeting.scheduledOn || meeting.createdAt)} — ${meetingOutcomeLabel(meeting)}${meeting.agenda ? ` · ${meeting.agenda}` : ''}`
   ).join('\n');
 }
 function campaignContactMoment(contact) {
@@ -12325,6 +12407,8 @@ function exportCampaignStatisticsXlsx() {
       'Booked on': meeting.createdAt || '',
       Agenda: meeting.agenda || '',
       Completed: meeting.completed ? 'Yes' : 'No',
+      Outcome: meetingOutcomeLabel(meeting),
+      'Rescheduled times': meetingReschedules(meeting).length,
     }));
     (c.statusHistory || []).forEach(entry => statusHistory.push({
       'Campaign name': campaignName,
