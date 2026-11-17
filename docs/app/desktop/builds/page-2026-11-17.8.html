@@ -965,6 +965,18 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     .chip-sporadic { background: #dce8f7; color: #27547f; }
     .chip-teammate { background: #f0e1ce; color: #76501c; }
     .chip-paid     { background: #d8ecd9; color: #265d27; }
+    .chip-won      { background: #d8ecd9; color: #265d27; }
+    .chip-lost     { background: #f3dcd8; color: #8a3b3b; }
+    .archive { margin-top:18px; display:grid; gap:14px; }
+    .archive-group header { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+    .archive-group header strong { font-size:13px; color:var(--crm-ash); }
+    .acard { background:var(--crm-surface); border:1px solid var(--crm-line); border-radius:12px; padding:12px 14px; margin-bottom:8px; }
+    .acard-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+    .acard-title { background:transparent; border:0; padding:0; cursor:pointer; font-size:14px; font-weight:600; color:var(--crm-ink); text-align:left; }
+    .acard-title:hover { text-decoration:underline; }
+    .acard-body { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:10px; padding-top:10px; border-top:1px solid var(--crm-line); }
+    @media (max-width:720px) { .acard-body { grid-template-columns:1fr; } }
+    .acard .avatar { width:26px; height:26px; font-size:10px; }
     .chip-brand    { background: #ece7f7; color: #4b3a86; }
     .chip-pending  { background: #f6e1c8; color: #7a4a10; }
     .btn { display:inline-flex; align-items:center; gap:8px; padding:8px 14px; border-radius:var(--crm-r-md); font-weight:600; font-size:13px; transition: transform .08s ease, background .15s, border-color .15s, color .15s; }
@@ -1452,7 +1464,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
 const STORAGE_KEY = 'lumexa_crm_state_v2';
 const CLOUD_BASE_STORAGE_KEY = 'lumexa_crm_cloud_base_v1';
-const CRM_BUILD_BADGE = 'build 2026-11-17.5';
+const CRM_BUILD_BADGE = 'build 2026-11-17.8';
 /* ----------------- time zone -----------------
    Every day, week and month boundary and every displayed time follows the workspace time zone
    (Settings → Workspace), Miami by default, so the whole team sees one calendar wherever a
@@ -1870,18 +1882,24 @@ const PROJECT_STAGES = [
   { id:'In production', copy:'Paid and moving through the workshop.', dot:'#3a8a56' },
   { id:'Delivering', copy:'Delivery and installation — dates and details go in the project note.', dot:'#2b8a9d' },
   { id:'On hold', copy:'Paused while the client decides.', dot:'#9a8f7a' },
-  { id:'Completed', copy:'Delivered, installed and done.', dot:'#3a3a3a' },
+  { id:'Won', copy:'Closed won — delivered and done. Archived with its estimates and renders.', dot:'#2f7a4a' },
+  { id:'Lost', copy:'Closed lost — the client did not go ahead. Archived with its estimates and renders.', dot:'#8a3b3b' },
 ];
+// Won and Lost close a project: it leaves the board and sits in the Pipeline archive together with
+// the estimates and renders tied to it. A closed project can be reopened at the stage it left.
+const CLOSED_STAGES = ['Won', 'Lost'];
+function isClosedStage(id) { return CLOSED_STAGES.includes(String(id || '')); }
+function projectClosed(p) { return !!p && isClosedStage(p.stage); }
 // Stage names used before the pipeline redesign (and in older backups) map onto the new ones.
-const LEGACY_STAGE_MAP = { 'New lead':'Planning', 'Qualifying':'Planning', 'In progress':'In production', 'Ready to complete':'In production' };
+const LEGACY_STAGE_MAP = { 'New lead':'Planning', 'Qualifying':'Planning', 'In progress':'In production', 'Ready to complete':'In production', 'Completed':'Won' };
 function normalizeStageId(value) {
   const raw = String(value || '');
   if (LEGACY_STAGE_MAP[raw]) return LEGACY_STAGE_MAP[raw];
   return PROJECT_STAGES.some(stage => stage.id === raw) ? raw : 'Planning';
 }
-const PIPELINE_STAGES = PROJECT_STAGES.filter(stage => stage.id !== 'Completed');
+const PIPELINE_STAGES = PROJECT_STAGES.filter(stage => !isClosedStage(stage.id));
 function nextStageId(stage) {
-  const order = PIPELINE_STAGES.filter(st => st.id !== 'On hold').map(st => st.id).concat('Completed');
+  const order = PIPELINE_STAGES.filter(st => st.id !== 'On hold').map(st => st.id).concat('Won');
   const i = order.indexOf(stage);
   return i >= 0 && i < order.length - 1 ? order[i + 1] : null;
 }
@@ -2045,9 +2063,43 @@ function normalizeProject(p, index = 0) {
     notes: typeof raw.notes === 'string' ? raw.notes : '',
     nextStep: typeof raw.nextStep === 'string' ? raw.nextStep : '',
     nextActionDue: typeof raw.nextActionDue === 'string' ? raw.nextActionDue : '',
+    // Set when the project is closed as Won or Lost: when, from which stage (so Reopen puts it
+    // back there) and, for a lost project, why.
+    closedAt: typeof raw.closedAt === 'string' ? raw.closedAt : '',
+    closedFromStage: typeof raw.closedFromStage === 'string' ? raw.closedFromStage : '',
+    outcomeNote: typeof raw.outcomeNote === 'string' ? raw.outcomeNote : '',
     createdAt: typeof raw.createdAt === 'string' && raw.createdAt ? raw.createdAt : new Date().toISOString(),
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : '',
   };
+}
+// Move a project to a stage, keeping the closed/reopened bookkeeping straight. Every stage change
+// (drawer select, board select, drag, the header buttons) goes through here.
+function applyProjectStage(c, p, stage, opts = {}) {
+  if (!p || !PROJECT_STAGES.some(option => option.id === stage)) return false;
+  const now = new Date().toISOString();
+  if (isClosedStage(stage)) {
+    if (!isClosedStage(p.stage)) p.closedFromStage = p.stage;
+    p.closedAt = opts.closedOn ? new Date(`${opts.closedOn}T12:00:00`).toISOString() : (p.closedAt && isClosedStage(p.stage) ? p.closedAt : now);
+    if (typeof opts.note === 'string') p.outcomeNote = opts.note;
+  } else {
+    p.closedAt = ''; p.closedFromStage = '';
+  }
+  p.stage = stage; p.updatedAt = now;
+  if (c) syncProjectMirror(c);
+  return true;
+}
+function reopenStageFor(p) {
+  return p && p.closedFromStage && PROJECT_STAGES.some(st => st.id === p.closedFromStage) && !isClosedStage(p.closedFromStage) ? p.closedFromStage : 'Planning';
+}
+// The estimates and renders that belong to a project: those tied to it, plus untied ones when the
+// lead has just this one project (what the pipeline card already counts as the project's amount).
+function projectEstimates(c, p) {
+  const only = contactProjects(c).length === 1;
+  return (c?.sales || []).filter(x => x && (x.projectId === p.id || (!x.projectId && only)));
+}
+function projectRenders(c, p) {
+  const only = contactProjects(c).length === 1;
+  return (c?.renders || []).filter(x => x && (x.projectId === p.id || (!x.projectId && only)));
 }
 function contactProjects(c) { return Array.isArray(c?.projects) ? c.projects : []; }
 function hasProjects(c) { return isProjectLead(c) || contactProjects(c).length > 0; }
@@ -2069,12 +2121,12 @@ function contactsWithProjectsIn(brand) {
 }
 function primaryProject(c) {
   const list = contactProjects(c);
-  return list.find(p => p.stage !== 'Completed') || list[list.length - 1] || null;
+  return list.find(p => !projectClosed(p)) || list[list.length - 1] || null;
 }
 // The project that currently carries the lead's next step: the one due soonest (a project with a
 // step but no date comes after dated ones). null when the lead has no projects.
 function nextStepTarget(c) {
-  const list = contactProjects(c).filter(p => p.stage !== 'Completed');
+  const list = contactProjects(c).filter(p => !projectClosed(p));
   const withStep = (list.length ? list : contactProjects(c)).filter(p => p.nextStep || p.nextActionDue);
   if (!withStep.length) return primaryProject(c);
   return withStep.slice().sort((a, b) => (localDateKey(a.nextActionDue) || '9999') .localeCompare(localDateKey(b.nextActionDue) || '9999'))[0];
@@ -2142,32 +2194,43 @@ function quickLogIsResponse() {
 }
 /* Partial payments. A sale's `amount` is the commissionable product value; `shipping` and
    `installation` are recorded beside it but earn no commission and never enter a sales total.
-   Money received is a list of `payments`, each entered as a % of the sale; the commission on a
-   payment is locked (rate × amount) the moment it is recorded and accrues in the month it lands.
+   The client, though, pays the whole invoice (amount + shipping + installation), so money
+   received is a list of `payments`, each entered as a % of that total: `amount` on a payment is
+   the money that actually came in, `commissionBase` the product share of it. The commission on
+   a payment is locked (rate × commissionBase) the moment it is recorded and accrues in the month
+   it lands.
    Status is derived: 'pending' (nothing received) → 'partial' → 'paid' (100%). A sale marked
    sold before partial payments existed has no `payments` list and counts as one 100% payment on
    its sold date, with whatever commission was locked in back then. */
 function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+// What the client owes in all: product + shipping + installation.
+function saleGrandTotal(s) { return round2(Number(s?.amount || 0) + Number(s?.shipping || 0) + Number(s?.installation || 0)); }
+// A payment's money received and its commissionable share, both derived from its percentage so
+// payments recorded before shipping/installation counted still read right.
+function paymentReceived(s, p) { return round2(saleGrandTotal(s) * Number(p?.percent || 0) / 100); }
+function paymentCommissionBase(s, p) { return round2(Number(s?.amount || 0) * Number(p?.percent || 0) / 100); }
 function salePayments(s) {
   if (Array.isArray(s?.payments) && s.payments.length) return s.payments;
-  if (s?.status === 'paid') return [{ id: `${s.id}-full`, date: s.paidOn || s.date || '', percent: 100, amount: Number(s.amount || 0), commissionRate: s.commissionRate, commissionAmount: s.commissionAmount, legacy: true }];
+  if (s?.status === 'paid') return [{ id: `${s.id}-full`, date: s.paidOn || s.date || '', percent: 100, amount: saleGrandTotal(s), commissionBase: Number(s.amount || 0), commissionRate: s.commissionRate, commissionAmount: s.commissionAmount, legacy: true }];
   return [];
 }
 function salePaidPercent(s) { return Math.min(100, round2(salePayments(s).reduce((sum, p) => sum + Number(p.percent || 0), 0))); }
-function salePaidAmount(s) { return round2(salePayments(s).reduce((sum, p) => sum + Number(p.amount || 0), 0)); }
-function saleOutstanding(s) { return Math.max(0, round2(Number(s?.amount || 0) - salePaidAmount(s))); }
+function salePaidAmount(s) { return round2(salePayments(s).reduce((sum, p) => sum + paymentReceived(s, p), 0)); }
+function saleOutstanding(s) { return Math.max(0, round2(saleGrandTotal(s) - salePaidAmount(s))); }
 function saleIsSold(s) { return s?.status === 'paid' || s?.status === 'partial'; }   // client committed with money down
 function saleFirstPaidOn(s) { const dates = salePayments(s).map(p => p.date || '').filter(Boolean).sort(); return dates[0] || ''; }
 function paymentCommissionAmount(s, p, fallbackRate) {
   if (p.commissionAmount !== undefined && p.commissionAmount !== null) return Number(p.commissionAmount || 0);
   const rate = (p.commissionRate ?? s.commissionRate ?? fallbackRate) || 0;
-  return round2(Number(p.amount || 0) * Number(rate));
+  return round2(paymentCommissionBase(s, p) * Number(rate));
 }
 // One row per payment (sale fields + payment fields) — what payouts and month views iterate.
 function salePaymentRows(sales) {
   const rows = [];
   for (const sale of sales) for (const payment of salePayments(sale)) {
-    rows.push({ ...sale, payment, paymentId: payment.id, paymentDate: payment.date || '', paymentPercent: Number(payment.percent || 0), paymentAmount: Number(payment.amount || 0) });
+    // paymentAmount is the commissionable share (what payouts and sales totals use);
+    // paymentReceived is the money that actually came in, shipping and installation included.
+    rows.push({ ...sale, payment, paymentId: payment.id, paymentDate: payment.date || '', paymentPercent: Number(payment.percent || 0), paymentAmount: paymentCommissionBase(sale, payment), paymentReceived: paymentReceived(sale, payment) });
   }
   return rows;
 }
@@ -2176,8 +2239,9 @@ function salePaymentRows(sales) {
 function recomputeSaleFromPayments(s) {
   const ps = Array.isArray(s.payments) ? s.payments : [];
   for (const p of ps) {
-    p.amount = round2(Number(s.amount || 0) * Number(p.percent || 0) / 100);
-    if (p.commissionRate !== undefined && p.commissionRate !== null) p.commissionAmount = round2(p.amount * Number(p.commissionRate || 0));
+    p.amount = paymentReceived(s, p);
+    p.commissionBase = paymentCommissionBase(s, p);
+    if (p.commissionRate !== undefined && p.commissionRate !== null) p.commissionAmount = round2(p.commissionBase * Number(p.commissionRate || 0));
   }
   if (!ps.length) { if (s.status === 'partial') { s.status = 'pending'; s.paidOn = null; } return; }
   const pct = ps.reduce((sum, p) => sum + Number(p.percent || 0), 0);
@@ -3204,7 +3268,7 @@ function mergeWithDefaults(incoming) {
     for (const t of merged.tasks) {
       if (!t || typeof t !== 'object') continue;
       const sameDay = t.kind === 'contacted-today';
-      t.lastResult = cleanResult(t.lastResult, sameDay);
+      t.lastResult = null; // shared slot retired: results are per person in resultsByUser
       if (t.resultsByUser && typeof t.resultsByUser === 'object') {
         for (const key of Object.keys(t.resultsByUser)) t.resultsByUser[key] = cleanResult(t.resultsByUser[key], sameDay);
       }
@@ -5482,6 +5546,7 @@ function renderProjectsCard(c) {
                   </select>
                   <button type="button" class="btn btn-ghost" data-action="remove-project" data-project-id="${esc(p.id)}" title="Remove this project" aria-label="Remove project">${svgIcon('trash')}</button>
                 </div>
+                ${projectClosed(p) ? `<div class="text-xs text-ash mt-2 flex items-center gap-2 flex-wrap" data-testid="project-archived-${esc(p.id)}"><span class="chip ${p.stage === 'Won' ? 'chip-won' : 'chip-lost'}">${esc(p.stage)}</span><span>Archived${p.closedAt ? ` ${esc(fmtDate(p.closedAt))}` : ''}${p.outcomeNote ? ` · ${esc(p.outcomeNote)}` : ''}</span><button type="button" class="underline hover:text-ink" data-action="reopen-project" data-project-id="${esc(p.id)}">Reopen</button></div>` : ''}
                 <div class="proj-card-next ${due && /overdue/i.test(due.label || '') ? 'late' : ''}">
                   <span class="label" style="margin:0">Next step</span>
                   <input class="input" data-project-field="nextStep" data-project-id="${esc(p.id)}" value="${esc(p.nextStep || '')}" placeholder="What should happen next on this project?"/>
@@ -5490,12 +5555,12 @@ function renderProjectsCard(c) {
                 <div class="project-label-picker">
                   ${PROJECT_LABELS.map(label => `<button type="button" class="${p.labels.includes(label)?'active':''}" data-project-label="${esc(label)}" data-project-id="${esc(p.id)}">${esc(label)}</button>`).join('')}
                 </div>
-                <textarea class="input mt-2" rows="2" data-project-field="notes" data-project-id="${esc(p.id)}" aria-label="Project note" placeholder="${p.stage === 'Delivering' ? 'Delivery date, installation details, who is on site…' : (p.stage === 'Completed' ? 'How it went, anything to remember…' : 'Project note — scope, what is blocking, what is next')}">${esc(p.notes)}</textarea>
+                <textarea class="input mt-2" rows="2" data-project-field="notes" data-project-id="${esc(p.id)}" aria-label="Project note" placeholder="${p.stage === 'Delivering' ? 'Delivery date, installation details, who is on site…' : (projectClosed(p) ? 'How it went, anything to remember…' : 'Project note — scope, what is blocking, what is next')}">${esc(p.notes)}</textarea>
               </div>`; }).join('')}
             </div>`;
 }
 function pipelineStats(cards) {
-  const open = cards.filter(card => card.p.stage !== 'Completed');
+  const open = cards.filter(card => !projectClosed(card.p));
   const leads = new Set(open.map(card => card.c.id));
   let followUps = 0, estimatesOut = 0;
   for (const id of leads) {
@@ -5550,8 +5615,9 @@ function pipelineCardHtml(c, p) {
 function renderProjectKanban() {
   const cards = projectBoardCards();
   const stats = pipelineStats(cards);
-  const stages = ui.showCompleted ? PROJECT_STAGES : PIPELINE_STAGES;
-  const completedCount = cards.filter(card => card.p.stage === 'Completed').length;
+  const stages = PIPELINE_STAGES;
+  const closed = cards.filter(card => projectClosed(card.p));
+  const won = closed.filter(card => card.p.stage === 'Won').length, lost = closed.length - won;
   const tile = (label, value, tone) => `<div class="card kpi-tile"><div class="kpi-label">${label}</div><div class="kpi-value ${tone || ''}">${value}</div></div>`;
   return `
     <div class="kpi-row" data-testid="pipeline-kpis">
@@ -5574,20 +5640,93 @@ function renderProjectKanban() {
       }).join('')}
     </div>
     <div class="mt-3 text-xs text-ash flex items-center gap-3">
-      <button type="button" class="hover:text-ink underline" data-action="toggle-completed">${ui.showCompleted ? 'Hide completed' : `Show completed (${completedCount})`}</button>
-      <span>· Drag a card or use its stage menu to move it. Click a card to open the lead.</span>
-    </div>`;
+      <button type="button" class="hover:text-ink underline" data-action="toggle-archive" data-testid="btn-toggle-archive">${ui.showArchive ? 'Hide archive' : `Archive (${won} won · ${lost} lost)`}</button>
+      <span>· Drag a card or use its stage menu to move it. Click a card to open the lead. Won and Lost projects leave the board and stay in the archive with their estimates and renders.</span>
+    </div>
+    ${ui.showArchive ? projectArchiveHtml(closed) : ''}`;
+}
+// The archive: every Won / Lost project on this brand, newest closing first, each with the
+// estimates and renders that belong to it and the lead's customer-file links.
+function projectArchiveHtml(closed) {
+  const money = canViewFinancials();
+  const sorted = closed.slice().sort((a, b) => String(b.p.closedAt || b.p.updatedAt || '').localeCompare(String(a.p.closedAt || a.p.updatedAt || '')));
+  const group = (outcome) => {
+    const list = sorted.filter(card => card.p.stage === outcome);
+    return `<section class="archive-group" data-testid="archive-${outcome.toLowerCase()}">
+      <header class="flex items-center gap-2"><span class="chip ${outcome === 'Won' ? 'chip-won' : 'chip-lost'}">${outcome}</span><strong>${list.length}</strong></header>
+      ${list.length ? '' : `<div class="text-sm text-ash py-3">No ${outcome.toLowerCase()} projects yet.</div>`}
+      ${list.map(({ c, p }) => {
+        const est = projectEstimates(c, p), ren = projectRenders(c, p), files = Array.isArray(c.files) ? c.files : [];
+        const owner = currentOwnerId(c);
+        const sub = projectName(c, p) === (c.company || c.name) ? (c.pointOfContact || (c.company ? c.name : c.email) || '') : (c.company || c.name || '');
+        return `<article class="acard" data-testid="archive-card-${esc(p.id)}">
+          <div class="acard-head">
+            <div class="min-w-0">
+              <button type="button" class="acard-title" data-action="open-contact" data-id="${esc(c.id)}" data-project-id="${esc(p.id)}">${esc(projectName(c, p))}</button>
+              <div class="text-xs text-ash">${esc(sub)}${brandOf(c) !== activeBrand() ? ` · ${esc(brandName(c))} lead` : ''} · ${outcome.toLowerCase()}${p.closedAt || p.updatedAt ? ` ${esc(fmtDate(p.closedAt || p.updatedAt))}` : ''}${p.closedFromStage ? ` · from ${esc(p.closedFromStage)}` : ''}${money && est.length ? ` · ${esc(projectAmountLabel(c, p) || '')}` : ''}</div>
+              ${p.outcomeNote ? `<div class="text-xs mt-1">${esc(p.outcomeNote)}</div>` : ''}
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <span class="avatar" style="${userColor(owner) ? `background:${esc(userColor(owner))}` : ''}" title="${esc(userName(owner))}">${esc(initialsOf(userName(owner) === 'Unassigned' ? '?' : (rosterUser(owner)?.name || ui.currentUser?.name || '?')))}</span>
+              <button type="button" class="btn btn-ghost" data-action="reopen-project-key" data-key="${esc(`${c.id}|${p.id}`)}" title="Put this project back on the board">Reopen</button>
+            </div>
+          </div>
+          <div class="acard-body">
+            <div>
+              <div class="label" style="margin:0 0 4px">Estimates${est.length ? ` · ${est.length}` : ''}</div>
+              ${!money ? '<div class="text-xs text-ash">Not visible for your role.</div>' : (est.length ? est.map(x => `<div class="text-xs mb-1"><div class="flex justify-between gap-2"><span class="truncate font-semibold">${esc(x.description || 'Estimate')}</span><span class="mono shrink-0">${fmtMoney(x.amount)}</span></div><div class="text-ash">${esc(saleProgressLabel(x))}</div></div>`).join('') : '<div class="text-xs text-ash">None tied to this project.</div>')}
+            </div>
+            <div>
+              <div class="label" style="margin:0 0 4px">Renders${ren.length ? ` · ${ren.length}` : ''}</div>
+              ${ren.length ? ren.map(x => `<div class="text-xs mb-1 flex justify-between gap-2"><span class="truncate font-semibold">${esc(x.description || 'Render package')}</span><span class="mono shrink-0">${esc(fmtUtcDate(x.date))}</span></div>`).join('') : '<div class="text-xs text-ash">None logged.</div>'}
+              ${files.length ? `<div class="text-xs mt-2">${files.map(f => `<a class="underline hover:text-ink" href="${esc(f.url)}" target="_blank" rel="noopener noreferrer">${esc(f.label || 'Customer files')}</a>`).join(' · ')}</div>` : ''}
+            </div>
+          </div>
+        </article>`;
+      }).join('')}
+    </section>`;
+  };
+  return `<div class="archive" data-testid="project-archive">${group('Won')}${group('Lost')}</div>`;
+}
+// Closing a project as lost asks why and can close its open estimates as declined in one go.
+function markProjectLost(c, p) {
+  const today = localDateKey(new Date());
+  const open = projectEstimates(c, p).filter(x => x.status === 'pending' && !salePayments(x).length);
+  openModal({
+    title: `Mark ${projectName(c, p)} as lost`,
+    subtitle: 'The project leaves the board and stays in the Pipeline archive with its estimates and renders. You can reopen it later.',
+    fields: [
+      { key:'closedOn', label:'Lost on', type:'date', value: today },
+      { key:'reason', label:'Why it was lost', type:'textarea', rows:3, placeholder:'e.g. price, timing, chose another supplier' },
+      ...(open.length ? [{ key:'declineSales', type:'checkbox', value:true, checkboxLabel:`Also close ${open.length} open estimate${open.length === 1 ? '' : 's'} as client declined`, help:'Keeps the reason in the monthly statistics.' }] : []),
+    ],
+    submitLabel: 'Mark lost',
+    onSubmit: (v) => {
+      if (!v.closedOn) { toast('Choose the date.'); return false; }
+      const reason = String(v.reason || '').trim();
+      applyProjectStage(c, p, 'Lost', { closedOn: v.closedOn, note: reason });
+      if (v.declineSales) for (const x of open) { x.status = 'declined'; x.paidOn = null; x.declinedOn = v.closedOn; x.declineReason = reason || 'Project lost'; }
+      saveState(); renderContactDrawer(); if (ui.page === 'projects') renderPage();
+      toast(`${projectName(c, p)} archived as lost.`);
+    },
+  });
+}
+function reopenProject(c, p) {
+  if (!c || !p || !projectClosed(p)) return;
+  const stage = reopenStageFor(p);
+  applyProjectStage(c, p, stage);
+  saveState(); renderPage();
+  if (ui.drawerContactId === c.id) renderContactDrawer();
+  toast(`${projectName(c, p)} reopened at ${stage}.`);
 }
 function moveProjectStage(key, stage) {
   const [contactId, projectId] = String(key || '').split('|');
   const contact = getContact(contactId);
   const p = contact ? findProject(contact, projectId) : null;
-  if (!contact || !p || !PROJECT_STAGES.some(option => option.id === stage)) return false;
-  p.stage = stage; p.updatedAt = new Date().toISOString();
-  syncProjectMirror(contact);
+  if (!contact || !p || !applyProjectStage(contact, p, stage)) return false;
   saveState(); renderPage();
   if (ui.drawerContactId === contact.id) renderContactDrawer();
-  toast(`${projectName(contact, p)} moved to ${stage}.`);
+  toast(isClosedStage(stage) ? `${projectName(contact, p)} archived as ${stage.toLowerCase()}.` : `${projectName(contact, p)} moved to ${stage}.`);
   return true;
 }
 
@@ -6492,7 +6631,7 @@ function renderSales() {
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
       <div class="card p-5"><div class="text-[11px] mono uppercase tracking-[0.2em] text-ash">Estimates</div><div class="serif text-4xl mt-2">${totals.count}</div>${totals.optionSets ? `<div class="text-xs text-ash mt-1">${totals.optionSets} set${totals.optionSets === 1 ? '' : 's'} of options, each counted once</div>` : ''}</div>
       <div class="card p-5"><div class="text-[11px] mono uppercase tracking-[0.2em] text-ash">Estimated value</div><div class="serif text-4xl mt-2">${fmtMoney(totals.gross)}</div>${totals.optionSets ? `<div class="text-xs text-ash mt-1">options counted at the lowest open one</div>` : ''}</div>
-      <div class="card p-5"><div class="text-[11px] mono uppercase tracking-[0.2em] text-ash">Sold value</div><div class="serif text-4xl mt-2 text-moss">${fmtMoney(totals.sold)}</div><div class="text-xs text-ash mt-1">${fmtMoney(totals.collected)} collected · ${fmtMoney(totals.outstanding)} outstanding · ${totals.declined} declined</div></div>
+      <div class="card p-5"><div class="text-[11px] mono uppercase tracking-[0.2em] text-ash">Sold value</div><div class="serif text-4xl mt-2 text-moss">${fmtMoney(totals.sold)}</div><div class="text-xs text-ash mt-1">${fmtMoney(totals.collected)} collected · ${fmtMoney(totals.outstanding)} outstanding · ${totals.declined} declined</div><div class="text-xs text-ash">collected and outstanding include shipping and installation</div></div>
       <div class="card p-5"><div class="text-[11px] mono uppercase tracking-[0.2em] text-ash">Pending</div><div class="serif text-4xl mt-2 text-ember">${fmtMoney(totals.pending)}</div></div>
     </div>
 
@@ -7367,8 +7506,8 @@ function renderTaskCard(t) {
           </div>
           <p class="text-sm text-ash mt-2">${esc(t.description)}</p>
           ${(() => {
-            const shown = t.kind === 'contacted-today' ? contactedTodayResultFor(t) : t.lastResult;
-            const ran = t.kind === 'contacted-today' ? (shown?.generatedAt || null) : t.lastRun;
+            const shown = taskResultFor(t);
+            const ran = shown?.generatedAt || null;
             return `<div class="text-xs text-ash mt-2 mono">Last run: ${ran ? fmtDateTime(ran) : 'never'}${shown ? ` · ${(shown.contacts || []).length} contacts` : ''}</div>`;
           })()}
         </div>
@@ -7382,10 +7521,11 @@ function renderTaskCard(t) {
 }
 
 function renderWarmFollowupResult(t) {
-  if (!t.lastResult) {
+  const result = taskResultFor(t);
+  if (!result) {
     return `<div class="mt-4 text-sm text-ash italic">Click <span class="kbd">Run</span> to generate the list.</div>`;
   }
-  const list = t.lastResult.contacts || [];
+  const list = result.contacts || [];
   if (list.length === 0) {
     return `<div class="mt-4 text-sm">Nothing to follow up with right now — every active contact was touched within the last ${t.thresholdDays||7} days. ✓</div>`;
   }
@@ -7409,7 +7549,7 @@ function renderWarmFollowupResult(t) {
             <span class="kbd">${overdue.length} overdue</span>
           </span>
         </div>
-        <div class="text-xs text-ash">Generated ${fmtDateTime(t.lastResult.generatedAt)}</div>
+        <div class="text-xs text-ash">Generated ${fmtDateTime(result.generatedAt)}</div>
       </div>
       <table class="w-full text-sm">
         <thead class="text-left text-[11px] uppercase tracking-[0.18em] text-ash">
@@ -7443,13 +7583,29 @@ function renderWarmFollowupResult(t) {
   `;
 }
 
-// "Contacted today" results are kept per person on the task (resultsByUser), never in the shared
-// lastResult slot — otherwise whoever ran it last would overwrite what every teammate sees.
-function contactedTodayResultKey() { return ui.currentUser?.id || 'local'; }
-function contactedTodayResultFor(t) {
+// Every automation's result is kept per person on the task (resultsByUser[userId]), never in the
+// shared lastResult slot — otherwise whoever ran it last (on any computer) overwrote what every
+// teammate saw. Running an automation is always for the person clicking Run.
+function taskResultKey() { return ui.currentUser?.id || 'local'; }
+function taskResultFor(t) {
   const byUser = (t?.resultsByUser && typeof t.resultsByUser === 'object') ? t.resultsByUser : {};
-  return byUser[contactedTodayResultKey()] || null;
+  return byUser[taskResultKey()] || null;
 }
+function setTaskResult(t, result) {
+  t.resultsByUser = (t.resultsByUser && typeof t.resultsByUser === 'object') ? t.resultsByUser : {};
+  t.resultsByUser[taskResultKey()] = result;
+  t.lastResult = null; // legacy shared slot — never read any more
+}
+// `all` clears everyone's list (a shared setting such as the threshold changed); otherwise only
+// the current person's, so a teammate's list is not wiped from another computer.
+function clearTaskResult(t, all = false) {
+  if (!t) return;
+  t.lastResult = null;
+  if (!t.resultsByUser || typeof t.resultsByUser !== 'object') return;
+  if (all) t.resultsByUser = {}; else delete t.resultsByUser[taskResultKey()];
+}
+function contactedTodayResultKey() { return taskResultKey(); }
+function contactedTodayResultFor(t) { return taskResultFor(t); }
 function renderContactedTodayResult(t) {
   const result = contactedTodayResultFor(t);
   if (!result) {
@@ -7546,10 +7702,11 @@ function projectActivityLabel(activity) {
 }
 
 function renderProjectTrackerResult(t) {
-  if (!t.lastResult) {
+  const result = taskResultFor(t);
+  if (!result) {
     return `<div class="mt-4 text-sm text-ash italic">Click <span class="kbd">Run</span> to see the latest project activity.</div>`;
   }
-  const list = t.lastResult.contacts || [];
+  const list = result.contacts || [];
   if (list.length === 0) {
     return `<div class="mt-4 text-sm">No Project leads yet. Open a contact and set its type to <span class="kbd">Project lead</span>.</div>`;
   }
@@ -7561,7 +7718,7 @@ function renderProjectTrackerResult(t) {
           Project tracker · ${list.length} project lead${list.length===1?'':'s'}
           <span class="ml-3 normal-case tracking-normal"><span class="kbd">${withActivity} with activity</span></span>
         </div>
-        <div class="text-xs text-ash">Generated ${fmtDateTime(t.lastResult.generatedAt)}</div>
+        <div class="text-xs text-ash">Generated ${fmtDateTime(result.generatedAt)}</div>
       </div>
       <table class="w-full text-sm">
         <thead class="text-left text-[11px] uppercase tracking-[0.18em] text-ash">
@@ -7592,10 +7749,11 @@ function renderProjectTrackerResult(t) {
 }
 
 function renderNoResponseResult(t) {
-  if (!t.lastResult) {
+  const result = taskResultFor(t);
+  if (!result) {
     return `<div class="mt-4 text-sm text-ash italic">Click <span class="kbd">Run</span> to check for leads that have not responded.</div>`;
   }
-  const list = t.lastResult.contacts || [];
+  const list = result.contacts || [];
   if (list.length === 0) {
     return `<div class="mt-4 text-sm">No standard leads have ${t.thresholdAttempts||7} unanswered outreach attempts. ✓</div>`;
   }
@@ -7603,7 +7761,7 @@ function renderNoResponseResult(t) {
     <div class="mt-5 border-t border-sand pt-4">
       <div class="flex items-baseline justify-between mb-3 flex-wrap gap-2">
         <div class="text-[11px] mono uppercase tracking-[0.2em] text-ash">No-response recommendations · ${list.length} lead${list.length===1?'':'s'}</div>
-        <div class="text-xs text-ash">Generated ${fmtDateTime(t.lastResult.generatedAt)}</div>
+        <div class="text-xs text-ash">Generated ${fmtDateTime(result.generatedAt)}</div>
       </div>
       <div class="text-xs text-ash mb-3">Counts unanswered outgoing calls, emails and WhatsApp messages. Incoming replies and picked-up calls reset the counter. These are suggestions only.</div>
       <table class="w-full text-sm">
@@ -7635,11 +7793,12 @@ function renderNoResponseResult(t) {
 }
 
 function renderContactedOnDateResult(t) {
-  if (!t.lastResult) {
+  const result = taskResultFor(t);
+  if (!result) {
     return `<div class="mt-4 text-sm text-ash italic">Click <span class="kbd">Run</span>, then choose a date to see only contacts reached that day.</div>`;
   }
-  const list = t.lastResult.contacts || [];
-  const selectedDate = t.lastResult.selectedDate || '';
+  const list = result.contacts || [];
+  const selectedDate = result.selectedDate || '';
   const label = selectedDate ? fmtDate(`${selectedDate}T12:00:00`) : 'the selected date';
   if (list.length === 0) {
     return `<div class="mt-4 text-sm">No calls, emails or WhatsApp messages were logged on ${esc(label)}.</div>`;
@@ -7649,7 +7808,7 @@ function renderContactedOnDateResult(t) {
     <div class="mt-5 border-t border-sand pt-4">
       <div class="flex items-baseline justify-between mb-3 flex-wrap gap-2">
         <div class="text-[11px] mono uppercase tracking-[0.2em] text-ash">Contacted on ${esc(label)} · ${list.length} contact${list.length===1?'':'s'}</div>
-        <div class="text-xs text-ash">Generated ${fmtDateTime(t.lastResult.generatedAt)}</div>
+        <div class="text-xs text-ash">Generated ${fmtDateTime(result.generatedAt)}</div>
       </div>
       <table class="w-full text-sm">
         <thead class="text-left text-[11px] uppercase tracking-[0.18em] text-ash">
@@ -8841,6 +9000,8 @@ function bindDrawerHeadHandlersOnly(c) {
   if (!head) return;
   head.querySelectorAll('[data-pick-project]').forEach(el => el.addEventListener('click', () => { ui.drawerProjectId = el.getAttribute('data-pick-project'); renderContactDrawer(); }));
   head.querySelectorAll('[data-action="advance-stage"]').forEach(el => el.addEventListener('click', () => { const p = drawerProject(c); const next = p ? nextStageId(p.stage) : null; if (p && next) moveProjectStage(`${c.id}|${p.id}`, next); }));
+  head.querySelectorAll('[data-action="mark-lost"]').forEach(el => el.addEventListener('click', () => { const p = findProject(c, el.getAttribute('data-project-id')); if (p) markProjectLost(c, p); }));
+  head.querySelectorAll('[data-action="reopen-project"]').forEach(el => el.addEventListener('click', () => reopenProject(c, findProject(c, el.getAttribute('data-project-id')))));
   head.querySelectorAll('[data-action="close-drawer"]').forEach(el => el.addEventListener('click', () => closeContactDrawer()));
   head.querySelectorAll('[data-quick-channel], [data-quick-incoming], [data-quick-outcome], [data-quick-when-toggle], [data-action="quick-log"], [data-action="snooze-next"], [data-action="complete-next-action"], [data-action="open-full-view"], [data-action="add-render-request"], [data-action="add-project"], [data-owner-select], [data-field], [data-project-field]').forEach(() => {});
   renderContactDrawer();
@@ -8855,9 +9016,11 @@ function projectStripHtml(c, selected) {
 function stageBarHtml(p) {
   if (!p) return '';
   const order = PIPELINE_STAGES.filter(st => st.id !== 'On hold').map(st => st.id);
-  const current = p.stage === 'Completed' ? order.length : order.indexOf(p.stage);
+  const closed = projectClosed(p);
+  const current = p.stage === 'Won' ? order.length : (p.stage === 'Lost' ? order.indexOf(p.closedFromStage) : order.indexOf(p.stage));
   const onHold = p.stage === 'On hold';
-  return `<div class="stage-bar" data-testid="stage-bar" title="${esc(p.stage)}">${order.map((id, i) => `<div><i class="${onHold ? '' : (i < current ? 'done' : (i === current ? 'current' : ''))}"></i><b class="${!onHold && i === current ? 'current' : ''}">${esc(id.replace('Render requested', 'Render req.').replace('Awaiting payment', 'Payment').replace('In production', 'Production').replace('Estimate sent', 'Estimate').replace('Delivering', 'Delivery'))}</b></div>`).join('')}${onHold ? '<span class="chip chip-onhold" style="grid-column:1/-1;justify-self:start">On hold</span>' : ''}</div>`;
+  const flat = onHold || closed;
+  return `<div class="stage-bar" data-testid="stage-bar" title="${esc(p.stage)}">${order.map((id, i) => `<div><i class="${onHold ? '' : (i < current ? 'done' : (i === current && !closed ? 'current' : ''))}"></i><b class="${!flat && i === current ? 'current' : ''}">${esc(id.replace('Render requested', 'Render req.').replace('Awaiting payment', 'Payment').replace('In production', 'Production').replace('Estimate sent', 'Estimate').replace('Delivering', 'Delivery'))}</b></div>`).join('')}${onHold ? '<span class="chip chip-onhold" style="grid-column:1/-1;justify-self:start">On hold</span>' : ''}${closed ? `<span class="chip ${p.stage === 'Won' ? 'chip-won' : 'chip-lost'}" style="grid-column:1/-1;justify-self:start" data-testid="stage-closed-chip">${esc(p.stage)}${p.closedAt ? ` · archived ${esc(fmtDate(p.closedAt))}` : ' · archived'}</span>` : ''}</div>`;
 }
 function drawerHeadHtml(c, moreLoggingHtml) {
   const p = drawerProject(c);
@@ -8878,7 +9041,10 @@ function drawerHeadHtml(c, moreLoggingHtml) {
         ${projectStripHtml(c, p)}
         ${stageBarHtml(p)}
         <div class="drawer-actions">
-          ${p ? `<button class="btn btn-primary" data-action="advance-stage" data-testid="btn-advance-stage" ${next ? '' : 'disabled'}>${next ? `Move to ${esc(next)}` : 'Completed'}</button>` : `<button class="btn btn-primary" data-action="add-project" data-testid="btn-add-project-head">${svgIcon('plus')} Start a project</button>`}
+          ${p ? (projectClosed(p)
+            ? `<button class="btn btn-primary" data-action="reopen-project" data-project-id="${esc(p.id)}" data-testid="btn-reopen-project">Reopen project</button>`
+            : `<button class="btn btn-primary" data-action="advance-stage" data-testid="btn-advance-stage" ${next ? '' : 'disabled'}>${next === 'Won' ? 'Mark as won' : (next ? `Move to ${esc(next)}` : 'On hold')}</button><button class="btn btn-ghost" data-action="mark-lost" data-project-id="${esc(p.id)}" data-testid="btn-mark-lost" title="Close this project as lost and archive it">Mark lost</button>`)
+            : `<button class="btn btn-primary" data-action="add-project" data-testid="btn-add-project-head">${svgIcon('plus')} Start a project</button>`}
           <button class="btn btn-ghost" data-action="add-render-request" data-testid="btn-add-render-request-head">Request render</button>
           <label class="reassign"><span>${svgIcon('users')} ${esc(userName(currentOwnerId(c)).replace(' (you)', ''))}</span>
             <select data-owner-select data-testid="contact-owner-select" aria-label="Reassign lead"><option value="">Unassigned</option>${rosterUsers().map(user => `<option value="${esc(user.id)}" ${currentOwnerId(c)===user.id?'selected':''}>${esc(user.name || user.email || 'Teammate')}</option>`).join('')}</select></label>
@@ -9307,7 +9473,7 @@ function renderContactDrawer() {
                         <div class="label">Installation (USD)</div>
                         <input type="number" step="0.01" min="0" class="input" data-sale-edit-field="installation" data-id="${s.id}" value="${esc(s.installation || 0)}"/>
                       </div>
-                      <div class="col-span-12 text-xs text-ash">Shipping and installation are recorded only — they earn no commission and never count in sales totals.${(s.payments || []).length ? ' Status and paid dates come from the recorded payments below.' : ''}</div>
+                      <div class="col-span-12 text-xs text-ash">Shipping and installation are part of what the client pays (payments are a % of the full total) but earn no commission and never count in sales totals.${(s.payments || []).length ? ' Status and paid dates come from the recorded payments below.' : ''}</div>
                       ${contactProjects(c).length ? `<div class="col-span-12">
                         <div class="label">Project</div>
                         <select class="select" data-sale-edit-field="projectId" data-id="${s.id}"><option value="">— not tied to a project</option>${contactProjects(c).map(p => `<option value="${esc(p.id)}" ${p.id === s.projectId ? 'selected' : ''}>${esc(projectName(c, p))}</option>`).join('')}</select>
@@ -9336,6 +9502,7 @@ function renderContactDrawer() {
               }
 
               const extras = [Number(s.shipping) ? `${fmtMoney(s.shipping)} shipping` : '', Number(s.installation) ? `${fmtMoney(s.installation)} installation` : ''].filter(Boolean);
+              if (extras.length) extras.push(`<strong>${fmtMoney(saleGrandTotal(s))} total to pay</strong>`);
               const hasPayments = (s.payments || []).length > 0;
               const legacyPaid = s.status === 'paid' && !hasPayments;
               let actions = '';
@@ -9346,7 +9513,7 @@ function renderContactDrawer() {
               <div class="py-3 ${s.status === 'not_selected' ? 'opacity-60' : ''}" data-testid="sale-row-${s.id}">
                 <div class="flex items-center justify-between gap-3">
                   <div class="min-w-0">
-                    <div class="text-sm font-semibold">${esc(s.description || 'Estimate')} · <span class="mono">${fmtMoney(s.amount)}</span>${optionLabel ? ` <span class="chip chip-brand" title="One of several options for the same scope — the set counts once">${esc(optionLabel)}</span>` : ''}${extras.length ? `<span class="text-xs text-ash font-normal"> + ${extras.join(' + ')} <span title="Recorded only — earns no commission and is not part of sales totals">(not commissionable)</span></span>` : ''}</div>
+                    <div class="text-sm font-semibold">${esc(s.description || 'Estimate')} · <span class="mono">${fmtMoney(s.amount)}</span>${optionLabel ? ` <span class="chip chip-brand" title="One of several options for the same scope — the set counts once">${esc(optionLabel)}</span>` : ''}${extras.length ? `<span class="text-xs text-ash font-normal"> + ${extras.slice(0, -1).join(' + ')} = ${extras[extras.length - 1]} <span title="Shipping and installation are part of what the client pays, but earn no commission and are not part of sales totals">(commission on ${fmtMoney(s.amount)} only)</span></span>` : ''}</div>
                     <div class="text-xs text-ash mono">Logged ${fmtUtcDate(s.date)} · ${saleProgressLabel(s)}${findProject(c, s.projectId) ? ` · ${esc(projectName(c, findProject(c, s.projectId)))}` : ''}</div>
                     ${canManagePayroll() ? `<div class="text-xs text-ash mt-0.5">Credited to <span class="font-semibold">${esc(userName(s.createdByUserId || s.ownerId) || 'Unassigned')}</span></div>` : ''}
                   </div>
@@ -9359,7 +9526,7 @@ function renderContactDrawer() {
                 </div>
                 ${hasPayments ? `<div class="mt-2 ml-3 border-l border-sand pl-3 space-y-1">
                   ${s.payments.map(pm => `<div class="flex items-center justify-between gap-2 text-xs" data-testid="payment-row-${pm.id}">
-                    <div class="mono">${fmtUtcDate(pm.date)} · ${pm.percent}% · ${fmtMoney(pm.amount)}${pm.note ? ` <span class="text-ash">· ${esc(pm.note)}</span>` : ''}</div>
+                    <div class="mono">${fmtUtcDate(pm.date)} · ${pm.percent}% · ${fmtMoney(paymentReceived(s, pm))}${saleGrandTotal(s) !== Number(s.amount || 0) ? ` <span class="text-ash" title="Shipping and installation are part of what the client pays, but earn no commission">(${fmtMoney(paymentCommissionBase(s, pm))} commissionable)</span>` : ''}${pm.note ? ` <span class="text-ash">· ${esc(pm.note)}</span>` : ''}</div>
                     <div class="flex items-center gap-2 shrink-0"><span class="text-ash">commission ${fmtMoney(paymentCommissionAmount(s, pm, 0))}</span><button class="btn btn-ghost" data-action="delete-payment" data-sale-id="${s.id}" data-id="${pm.id}" title="Remove this payment">${svgIcon('x')}</button></div>
                   </div>`).join('')}
                 </div>` : ''}
@@ -10019,7 +10186,8 @@ function bindPageHandlers() {
     newContact(true);
     ui.newProjectStage = null;
   }));
-  document.querySelectorAll('[data-action="toggle-completed"]').forEach(el => el.addEventListener('click', () => { ui.showCompleted = !ui.showCompleted; renderPage(); }));
+  document.querySelectorAll('[data-action="toggle-archive"]').forEach(el => el.addEventListener('click', () => { ui.showArchive = !ui.showArchive; renderPage(); }));
+  document.querySelectorAll('[data-action="reopen-project-key"]').forEach(el => el.addEventListener('click', () => { const [cid, pid] = String(el.getAttribute('data-key') || '').split('|'); const c = getContact(cid); reopenProject(c, c ? findProject(c, pid) : null); }));
   let draggedProjectId = null;
   document.querySelectorAll('[data-project-drag]').forEach(el => {
     el.addEventListener('dragstart', event => {
@@ -10531,6 +10699,8 @@ function bindDrawerHandlers() {
     if (!p || !next) return;
     moveProjectStage(`${c.id}|${p.id}`, next);
   }));
+  document.querySelectorAll('#drawer-root [data-action="mark-lost"]').forEach(el => el.addEventListener('click', () => { const p = findProject(c, el.getAttribute('data-project-id')); if (p) markProjectLost(c, p); }));
+  document.querySelectorAll('#drawer-root [data-action="reopen-project"]').forEach(el => el.addEventListener('click', () => reopenProject(c, findProject(c, el.getAttribute('data-project-id')))));
   document.querySelectorAll('[data-action="open-full-view"]').forEach(el => el.addEventListener('click', () => {
     ui.splitOverride = true;
     openContactAnywhere(c.id);
@@ -10553,9 +10723,8 @@ function bindDrawerHandlers() {
       if (field === 'stage' && !PROJECT_STAGES.some(stage => stage.id === el.value)) return;
       if (field === 'brand' && !(el.value === '' || BRANDS[el.value])) return;
       if (p[field] === el.value) return;
-      p[field] = field === 'name' ? el.value.trim() : el.value;
-      p.updatedAt = new Date().toISOString();
-      syncProjectMirror(c);
+      if (field === 'stage') applyProjectStage(c, p, el.value);
+      else { p[field] = field === 'name' ? el.value.trim() : el.value; p.updatedAt = new Date().toISOString(); syncProjectMirror(c); }
       saveState();
       if (field === 'stage' || field === 'brand') { renderContactDrawer(); if (ui.page === 'projects') renderPage(); }
       else if (['projects','contacts','actions','dashboard','calendar'].includes(ui.page)) renderPage();
@@ -11092,7 +11261,7 @@ function bindDrawerHandlers() {
         fields: [
           { key:'description', label:'Estimate description', type:'text', placeholder:'e.g. Brass pendant order' },
           { key:'amount', label:'Amount (USD)', type:'number', step:'0.01', min:0, placeholder:'0.00', help:'The product value — this is what commission and sales totals are based on.' },
-          { key:'shipping', label:'Shipping (USD)', type:'number', step:'0.01', min:0, placeholder:'0.00', help:'Recorded only — no commission, not counted in sales totals.' },
+          { key:'shipping', label:'Shipping (USD)', type:'number', step:'0.01', min:0, placeholder:'0.00', help:'Part of what the client pays, but no commission and not counted in sales totals.' },
           { key:'installation', label:'Installation (USD)', type:'number', step:'0.01', min:0, placeholder:'0.00', help:'Recorded only — no commission, not counted in sales totals.' },
           { key:'date', label:'Logged on', type:'date', value: today },
           ...(contactProjects(c).length ? [{ key:'projectId', label:'Project', type:'select', value: (drawerProject(c) || primaryProject(c))?.id || '', options: [{ value:'', label:'— not tied to a project' }, ...contactProjects(c).map(p => ({ value:p.id, label:projectName(c, p) }))] }] : []),
@@ -11127,28 +11296,33 @@ function bindDrawerHandlers() {
       const paidPct = salePaidPercent(s);
       const remaining = Math.max(0, round2(100 - paidPct));
       const today = localDateKey(new Date());
+      const total = saleGrandTotal(s);
+      const parts = [`${fmtMoney(s.amount)} lighting`, Number(s.installation) ? `${fmtMoney(s.installation)} installation` : '', Number(s.shipping) ? `${fmtMoney(s.shipping)} shipping` : ''].filter(Boolean);
       openModal({
         title: paidPct > 0 ? 'Record another payment' : 'Record a payment',
-        subtitle: `${fmtMoney(s.amount)} sale${paidPct ? ` · ${paidPct}% (${fmtMoney(salePaidAmount(s))}) paid so far` : ''}. Commission on this payment counts in the month it was paid.`,
+        subtitle: `${fmtMoney(total)} to pay in all${parts.length > 1 ? ` (${parts.join(' + ')})` : ''}${paidPct ? ` · ${paidPct}% (${fmtMoney(salePaidAmount(s))}) paid so far` : ''}. ${parts.length > 1 ? `Commission is on the ${fmtMoney(s.amount)} lighting only; it` : 'Commission on this payment'} counts in the month it was paid.`,
         fields: [
-          { key:'percent', label:'Payment (% of the sale)', type:'number', step:'0.01', min:0, value: remaining, help:`${remaining}% (${fmtMoney(round2(Number(s.amount || 0) * remaining / 100))}) is outstanding. Enter 100 for payment in full.` },
+          { key:'percent', label:`Payment (% of the ${fmtMoney(total)} total)`, type:'number', step:'0.01', min:0, value: remaining, help:`${remaining}% (${fmtMoney(round2(total * remaining / 100))}) is outstanding. Enter 100 for payment in full.` },
+          { key:'received', label:'…or the amount received (USD)', type:'number', step:'0.01', min:0, placeholder:'0.00', help:'Fill this in instead of the percentage when you know the dollar figure; the percentage is worked out from it.' },
           { key:'date', label:'Paid on', type:'date', value: today },
           { key:'note', label:'Note', type:'text', placeholder:'e.g. deposit, second installment, final balance' },
         ],
         submitLabel: 'Record payment',
         onSubmit: v => {
-          const pct = round2(Number(v.percent || 0));
-          if (!(pct > 0)) { toast('Enter the percentage that was paid.'); return false; }
-          if (pct > remaining + 0.005) { toast(`Only ${remaining}% is outstanding on this sale.`); return false; }
+          const received = round2(Number(v.received || 0));
+          const pct = received > 0 && total > 0 ? round2(received / total * 100) : round2(Number(v.percent || 0));
+          if (!(pct > 0)) { toast('Enter the percentage or the amount that was paid.'); return false; }
+          if (pct > remaining + 0.005) { toast(`Only ${remaining}% (${fmtMoney(round2(total * remaining / 100))}) is outstanding on this sale.`); return false; }
           if (!v.date) { toast('Choose the date the payment was received.'); return false; }
           s.ownerId = s.ownerId || ownerIdAtDate(c, v.date);
           // Credit the lead's owner, not whoever is entering the payment (a manager reconciling
           // payments must not take a teammate's commission).
           s.createdByUserId = s.createdByUserId || s.ownerId || ui.currentUser?.id || '';
           const rate = Number(payPlanFor(s.createdByUserId || s.ownerId).commissionRate || 0);
-          const amount = round2(Number(s.amount || 0) * pct / 100);
+          const amount = round2(total * pct / 100);
+          const commissionBase = round2(Number(s.amount || 0) * pct / 100);
           s.payments = Array.isArray(s.payments) ? s.payments : [];
-          s.payments.push({ id: cryptoId(), date: v.date, percent: pct, amount, note: (v.note || '').trim(), commissionRate: rate, commissionAmount: round2(amount * rate), recordedByUserId: ui.currentUser?.id || '' });
+          s.payments.push({ id: cryptoId(), date: v.date, percent: pct, amount, commissionBase, note: (v.note || '').trim(), commissionRate: rate, commissionAmount: round2(commissionBase * rate), recordedByUserId: ui.currentUser?.id || '' });
           recomputeSaleFromPayments(s);
           const closed = closeOtherOptions(c, s, v.date);
           saveStateNow(); renderContactDrawer();
@@ -11468,7 +11642,7 @@ function editTask(id) {
         const n = Math.max(1, Math.min(365, parseInt(v.days, 10) || 7));
         t.thresholdDays = n;
         t.enabled = v.enabled === 'on';
-        t.lastResult = null;
+        clearTaskResult(t, true);
         saveState(); renderPage();
         toast(`Threshold set to ${n} days. Click Run to refresh the list.`);
       },
@@ -11488,7 +11662,7 @@ function editTask(id) {
         const n = Math.max(1, Math.min(100, parseInt(v.attempts, 10) || 7));
         t.thresholdAttempts = n;
         t.enabled = v.enabled === 'on';
-        t.lastResult = null;
+        clearTaskResult(t, true);
         saveState(); renderPage();
         toast(`Recommendation threshold set to ${n} unanswered reach-outs.`);
       },
@@ -11504,7 +11678,7 @@ function openContactedOnDatePicker(id) {
     title: 'Previously contacted',
     subtitle: 'Choose a date to see only the contacts you called, emailed or messaged that day.',
     fields: [
-      { key:'date', label:'Contact date', type:'date', value: t.lastResult?.selectedDate || localDateKey(new Date()) },
+      { key:'date', label:'Contact date', type:'date', value: taskResultFor(t)?.selectedDate || localDateKey(new Date()) },
     ],
     submitLabel: 'Show contacts',
     onSubmit: (v) => {
@@ -11516,7 +11690,7 @@ function openContactedOnDatePicker(id) {
 
 function invalidateNoResponseResult() {
   for (const task of (state.tasks || [])) {
-    if (task.kind === 'no-response-recommendation') task.lastResult = null;
+    if (task.kind === 'no-response-recommendation') clearTaskResult(task);
   }
 }
 
@@ -11543,7 +11717,7 @@ function applyNoResponseRecommendation(id, status, attempts) {
   c.statusReason = `${attempts} unanswered outreach attempt${attempts===1?'':'s'} — set from no-response recommendation.`;
   c.statusHistory = c.statusHistory || [];
   c.statusHistory.push({ status, changedAt: new Date().toISOString() });
-  for (const task of state.tasks) if (task.kind === 'no-response-recommendation') task.lastResult = null;
+  for (const task of state.tasks) if (task.kind === 'no-response-recommendation') clearTaskResult(task);
   saveState(); renderAll();
   toast(`${c.name || 'Contact'} marked ${status}.`);
 }
@@ -11602,7 +11776,7 @@ function runTask(id, options = {}) {
       if (sa !== sb) return sa - sb;
       return (b.daysSince || 0) - (a.daysSince || 0);
     });
-    t.lastResult = { v3: true, generatedAt: nowIso, contacts: picks };
+    setTaskResult(t, { v3: true, generatedAt: nowIso, contacts: picks });
     saveState(); renderPage();
     const neverN = picks.filter(p => p.daysSince === null).length;
     toast(`Found ${picks.length} contact${picks.length===1?'':'s'} (${neverN} never contacted · ${picks.length - neverN} overdue).`);
@@ -11634,7 +11808,7 @@ function runTask(id, options = {}) {
       if (!b.lastActivity) return -1;
       return (b.lastActivity.timestamp || '').localeCompare(a.lastActivity.timestamp || '');
     });
-    t.lastResult = { v2: true, generatedAt: nowIso, contacts: projects };
+    setTaskResult(t, { v2: true, generatedAt: nowIso, contacts: projects });
     saveState(); renderPage();
     const active = projects.filter(p => p.lastActivity).length;
     toast(`${projects.length} project lead${projects.length===1?'':'s'} · ${active} with activity logged.`);
@@ -11662,7 +11836,7 @@ function runTask(id, options = {}) {
       });
     }
     picks.sort((a, b) => b.attempts - a.attempts || (b.lastTimestamp || '').localeCompare(a.lastTimestamp || ''));
-    t.lastResult = { v2: true, generatedAt: nowIso, contacts: picks };
+    setTaskResult(t, { v2: true, generatedAt: nowIso, contacts: picks });
     saveState(); renderPage();
     toast(`${picks.length} lead${picks.length===1?'':'s'} reached ${threshold} unanswered outreach attempts.`);
     return;
@@ -11681,7 +11855,7 @@ function runTask(id, options = {}) {
       picks.push({ id:c.id, name:c.name || '—', status:c.status || 'Cold', pointOfContact:c.pointOfContact || '', touches, latest:touches[touches.length-1].timestamp, ownerId: currentOwnerId(c) });
     }
     picks.sort((a, b) => (b.latest || '').localeCompare(a.latest || ''));
-    t.lastResult = { v2: true, generatedAt: nowIso, selectedDate, contacts: picks };
+    setTaskResult(t, { v2: true, generatedAt: nowIso, selectedDate, contacts: picks });
     saveState(); renderPage();
     toast(`${picks.length} contact${picks.length===1?'':'s'} contacted on ${fmtDate(`${selectedDate}T12:00:00`)}.`);
     return;
@@ -11692,7 +11866,6 @@ function runTask(id, options = {}) {
     // Personal by design: the run is always for the person clicking Run, and its result is kept
     // per person (below) so teammates running the same automation never see each other's list.
     const userId = ui.currentUser?.id || '';
-    const resultKey = contactedTodayResultKey();
     const todayKey = localDateKey(now);
     const picks = [];
     for (const c of reportContacts()) {
@@ -11719,9 +11892,7 @@ function runTask(id, options = {}) {
       }
     }
     picks.sort((a, b) => (b.latest || '').localeCompare(a.latest || ''));
-    t.resultsByUser = (t.resultsByUser && typeof t.resultsByUser === 'object') ? t.resultsByUser : {};
-    t.resultsByUser[resultKey] = { v2: true, generatedAt: nowIso, contacts: picks };
-    t.lastResult = null; // legacy shared slot — no longer read for this automation
+    setTaskResult(t, { v2: true, generatedAt: nowIso, contacts: picks });
     saveState(); renderPage();
     let calls = 0, emails = 0, dms = 0;
     for (const p of picks) for (const tch of p.touches) {
@@ -12043,7 +12214,7 @@ function exportContactsXlsx() {
   const automations = state.tasks.map(task => ({
     'Automation ID': task.id || '', Name: task.name || '', Kind: task.kind || '', Description: task.description || '',
     Trigger: task.trigger || '', Enabled: task.enabled === false ? 'No' : 'Yes', 'Last run': task.lastRun || '',
-    'Last result': xlsxValue(task.lastResult || ''),
+    'Last result': xlsxValue(taskResultFor(task) || ''),
   }));
   const dailyReports = reportEntries('daily').map(([date, report]) => ({ Date: date, ...xlsxRecord(report) }));
   const weeklyReports = reportEntries('weekly').map(([week, report]) => ({ Week: week, ...xlsxRecord(report) }));
@@ -12325,12 +12496,14 @@ function exportSalesXlsx() {
     Description: s.description || '',
     'Option set': optionIndexLabel(c, s),
     'Amount (USD)': Number(s.amount || 0),
+    'Total to pay (USD, incl. shipping & installation)': saleGrandTotal(s),
     'Paid %': salePaidPercent(s),
     'Paid amount (USD)': salePaidAmount(s),
+    'Paid amount commissionable (USD)': round2(salePayments(s).reduce((sum, pm) => sum + paymentCommissionBase(s, pm), 0)),
     'Outstanding (USD)': saleIsSold(s) ? saleOutstanding(s) : '',
     'Shipping (USD, not commissionable)': Number(s.shipping || 0),
     'Installation (USD, not commissionable)': Number(s.installation || 0),
-    Payments: salePayments(s).map(pm => `${pm.date || ''} · ${pm.percent}% · ${fmtMoney(pm.amount)}${pm.note ? ` · ${pm.note}` : ''}`).join('; '),
+    Payments: salePayments(s).map(pm => `${pm.date || ''} · ${pm.percent}% · ${fmtMoney(paymentReceived(s, pm))}${pm.note ? ` · ${pm.note}` : ''}`).join('; '),
     Outcome: saleStatusLabel(s),
     'Logged on': s.date || '',
     'First payment on': saleFirstPaidOn(s) || '',
