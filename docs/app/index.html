@@ -1353,7 +1353,7 @@
 
 const STORAGE_KEY = 'lumexa_crm_state_v2';
 const CLOUD_BASE_STORAGE_KEY = 'lumexa_crm_cloud_base_v1';
-const CRM_BUILD_BADGE = 'build 2026-11-17.10';
+const CRM_BUILD_BADGE = 'build 2026-11-17.11';
 /* ----------------- time zone -----------------
    Every day, week and month boundary and every displayed time follows the workspace time zone
    (Settings → Workspace), Miami by default, so the whole team sees one calendar wherever a
@@ -2914,6 +2914,18 @@ function mergeWithDefaults(incoming) {
         phone: person.phone || '',
         notes: person.notes || '',
       })) : [];
+      // Addresses: office, showroom, delivery / installation site… each a labelled block, kept
+      // beside the lead like the company's people.
+      c.addresses = Array.isArray(c.addresses) ? c.addresses.filter(a => a && typeof a === 'object').map(a => ({
+        id: a.id || cryptoId(),
+        label: typeof a.label === 'string' ? a.label : '',
+        street: typeof a.street === 'string' ? a.street : '',
+        city: typeof a.city === 'string' ? a.city : '',
+        state: typeof a.state === 'string' ? a.state : '',
+        zip: typeof a.zip === 'string' ? a.zip : '',
+        country: typeof a.country === 'string' ? a.country : '',
+        notes: typeof a.notes === 'string' ? a.notes : '',
+      })) : [];
       c.calls = Array.isArray(c.calls) ? c.calls.map(log => ({
         ...log,
         id: log?.id || cryptoId(),
@@ -3187,7 +3199,7 @@ function mergeWithDefaults(incoming) {
     if (Array.isArray(merged.contacts)) {
       merged.contacts = alive(merged.contacts);
       for (const c of merged.contacts) {
-        for (const field of ['calls', 'meetings', 'sales', 'renders', 'renderRequests', 'orders', 'subcontacts', 'files', 'projects']) c[field] = alive(c[field]);
+        for (const field of ['calls', 'meetings', 'sales', 'renders', 'renderRequests', 'orders', 'subcontacts', 'addresses', 'files', 'projects']) c[field] = alive(c[field]);
         for (const sale of (c.sales || [])) {
           if (!Array.isArray(sale.payments) || !sale.payments.length) continue;
           const before = sale.payments.length; sale.payments = alive(sale.payments);
@@ -3738,7 +3750,7 @@ async function cloudLoadTeamData() {
 
 // Port of the old server's crm_audit_changes, computed from the records a save actually changed.
 const CLOUD_AUDIT_CONTACT_FIELDS = { name:'Name', pointOfContact:'Point of contact', email:'Email', phone:'Phone', company:'Company', role:'Role', website:'Website', status:'Status', statusReason:'Status reason', leadType:'Lead type', leadSource:'Lead source', campaignName:'Campaign name', brand:'Brand', nextStep:'Next step', nextActionDue:'Next action date', onHoldUntil:'On Hold follow-up', tags:'Tags', notes:'Notes' };
-const CLOUD_AUDIT_CONTACT_LISTS = [['subcontacts','Company contacts'], ['meetings','Meetings'], ['calls','Communication log'], ['files','Customer files'], ['projects','Projects'], ['orders','Production orders'], ['renders','Renders'], ['renderRequests','Render requests']];
+const CLOUD_AUDIT_CONTACT_LISTS = [['subcontacts','Company contacts'], ['addresses','Addresses'], ['meetings','Meetings'], ['calls','Communication log'], ['files','Customer files'], ['projects','Projects'], ['orders','Production orders'], ['renders','Renders'], ['renderRequests','Render requests']];
 const CLOUD_AUDIT_KINDS = { calendarEvent:'Calendar', task:'Automations', dailyReport:'Daily reports', weeklyReport:'Weekly reports', monthlyReport:'Monthly reports', settings:'Payout settings', payRate:'Payout settings', payPlan:'Pay plans', workspaceSettings:'Workspace settings', leadCategory:'Lead categories', salesActivity:'Legacy financial activity' };
 function cloudAuditEntries(changes) {
   const same = (a, b) => JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
@@ -3829,7 +3841,7 @@ async function cloudImportBackup(parsed) {
 // from a web CRM backup. Only adds — a lead the cloud has never seen, or a meeting, call,
 // estimate, render, order, file, contact person or project the lead here does not have yet.
 // Never changes a value already in the cloud, never brings back what was deleted here.
-const ADD_MISSING_LISTS = { meetings: 'meetings', calls: 'calls', sales: 'estimates', renders: 'renders', renderRequests: 'render requests', orders: 'orders', files: 'files', subcontacts: 'contact people', projects: 'projects' };
+const ADD_MISSING_LISTS = { meetings: 'meetings', calls: 'calls', sales: 'estimates', renders: 'renders', renderRequests: 'render requests', orders: 'orders', files: 'files', subcontacts: 'contact people', addresses: 'addresses', projects: 'projects' };
 function missingFromBackup(parsed, live, map) {
   const cleaned = mergeWithDefaults(remapUserIds(parsed, map));
   const tomb = new Set((live.tombstones || []).map(t => t && String(t.id)));
@@ -4160,7 +4172,7 @@ function ensureRecordIds(s) {
   for (const c of (s.contacts || [])) {
     if (!c || typeof c !== 'object') continue;
     if (!c.id) c.id = cryptoId();
-    for (const f of ['calls','meetings','sales','renders','renderRequests','orders','subcontacts','ownershipHistory','files','projects']) {
+    for (const f of ['calls','meetings','sales','renders','renderRequests','orders','subcontacts','addresses','ownershipHistory','files','projects']) {
       for (const item of (c[f] || [])) if (item && typeof item === 'object' && !item.id) item.id = cryptoId();
     }
     for (const sale of (c.sales || [])) for (const pm of (sale && sale.payments) || []) if (pm && typeof pm === 'object' && !pm.id) pm.id = cryptoId();
@@ -5333,6 +5345,11 @@ function meetingOutcomeLabel(m) {
   const o = meetingOutcome(m);
   return o === 'completed' ? 'Completed' : (o === 'missed' ? `Did not happen · ${meetingMissLabel(m)}` : 'Scheduled');
 }
+const ADDRESS_LABELS = ['Office', 'Showroom', 'Delivery / installation site', 'Billing', 'Home', 'Other'];
+function addressOneLine(a) {
+  return [a?.street, [a?.city, a?.state].filter(Boolean).join(', '), a?.zip, a?.country].map(x => String(x || '').trim()).filter(Boolean).join(', ');
+}
+function addressMapUrl(a) { const q = addressOneLine(a); return q ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}` : ''; }
 function meetingTypeOptions(selected) { return Object.entries(MEETING_TYPES).map(([k, t]) => `<option value="${k}" ${selected === k ? 'selected' : ''}>${t.label}</option>`).join(''); }
 function initialsOf(name) {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
@@ -6152,7 +6169,8 @@ function filterContacts() {
         || (c.pointOfContact && c.pointOfContact.toLowerCase().includes(q))
         || (c.campaignName && c.campaignName.toLowerCase().includes(q))
         || contactProjects(c).some(p => p.name && p.name.toLowerCase().includes(q))
-        || (c.subcontacts || []).some(person => [person.name, person.role, person.email, person.phone].some(value => String(value || '').toLowerCase().includes(q)));
+        || (c.subcontacts || []).some(person => [person.name, person.role, person.email, person.phone].some(value => String(value || '').toLowerCase().includes(q)))
+        || (c.addresses || []).some(a => addressOneLine(a).toLowerCase().includes(q) || String(a.label || '').toLowerCase().includes(q));
   }));
 }
 
@@ -9162,6 +9180,32 @@ function renderContactDrawer() {
             </div>`).join('')}
         </div>
       </details></section>
+      <section data-drawer-pane="lead" class="px-7 py-3 border-b border-sand"><details class="drawer-section" data-drawer-section="addresses" ${ui.drawerAddressesOpen ? 'open' : ''} data-testid="drawer-addresses">
+        <summary>Addresses <small>${(c.addresses || []).length ? `${(c.addresses || []).length} added` : 'none added'}</small></summary>
+        <div class="flex items-center justify-between gap-3 mt-2">
+          <div class="text-xs text-ash">Office, showroom, delivery or installation site — as many as the lead needs.</div>
+          <button class="btn btn-ghost" data-action="add-address" data-testid="btn-add-address">${svgIcon('plus')} Add address</button>
+        </div>
+        <div class="mt-4 divide-row">
+          ${(c.addresses || []).length === 0 ? `<div class="text-sm text-ash py-4">No addresses added for this lead.</div>` : (c.addresses || []).map(a => `
+            <div class="py-4 flex items-start gap-3" data-testid="address-row-${a.id}">
+              <div class="w-9 h-9 rounded-full bg-sand flex items-center justify-center shrink-0">${svgIcon('map')}</div>
+              <div class="flex-1 min-w-0">
+                <div class="font-semibold text-sm">${esc(a.label || 'Address')}</div>
+                <div class="text-sm mt-1 leading-relaxed">${esc(a.street || '')}${a.street ? '<br/>' : ''}${esc([a.city, a.state].filter(Boolean).join(', '))}${a.zip ? ` ${esc(a.zip)}` : ''}${a.country ? `<br/>${esc(a.country)}` : ''}</div>
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs">
+                  ${addressMapUrl(a) ? `<a class="text-ember hover:underline" href="${esc(addressMapUrl(a))}" target="_blank" rel="noopener noreferrer">Open in Maps</a>` : ''}
+                  ${addressOneLine(a) ? `<button type="button" class="hover:underline text-ash" data-action="copy-address" data-id="${a.id}">Copy</button>` : ''}
+                </div>
+                ${a.notes ? `<div class="text-xs mt-2 leading-relaxed text-ash">${esc(a.notes)}</div>` : ''}
+              </div>
+              <div class="flex items-center gap-1 shrink-0">
+                <button class="btn btn-ghost" data-action="edit-address" data-id="${a.id}" data-testid="btn-edit-address-${a.id}" title="Edit address">${svgIcon('pencil')}</button>
+                <button class="btn btn-danger" data-action="delete-address" data-id="${a.id}" data-testid="btn-delete-address-${a.id}" title="Delete address">${svgIcon('trash')}</button>
+              </div>
+            </div>`).join('')}
+        </div>
+      </details></section>
       <section data-drawer-pane="lead" class="px-7 py-5 border-b border-sand">
         <div class="flex items-center justify-between gap-3">
           <h3 class="serif text-2xl">Meetings</h3>
@@ -10592,7 +10636,7 @@ function bindDrawerHandlers() {
   document.querySelectorAll('[data-quick-when-toggle]').forEach(el => el.addEventListener('click', () => { ui.quickLogWhenOpen = !ui.quickLogWhenOpen; if (!ui.quickLogWhenOpen) { ui.quickLogWhen = ''; ui.quickLogDuration = ''; } renderContactDrawer(); }));
   document.querySelectorAll('[data-quick-when]').forEach(el => el.addEventListener('change', () => { ui.quickLogWhen = el.value; }));
   document.querySelectorAll('[data-quick-duration]').forEach(el => el.addEventListener('input', () => { ui.quickLogDuration = el.value; }));
-  document.querySelectorAll('details[data-drawer-section]').forEach(el => el.addEventListener('toggle', () => { if (el.getAttribute('data-drawer-section') === 'details') ui.drawerDetailsOpen = el.open; if (el.getAttribute('data-drawer-section') === 'people') ui.drawerPeopleOpen = el.open; }));
+  document.querySelectorAll('details[data-drawer-section]').forEach(el => el.addEventListener('toggle', () => { if (el.getAttribute('data-drawer-section') === 'details') ui.drawerDetailsOpen = el.open; if (el.getAttribute('data-drawer-section') === 'people') ui.drawerPeopleOpen = el.open; if (el.getAttribute('data-drawer-section') === 'addresses') ui.drawerAddressesOpen = el.open; }));
   document.querySelectorAll('[data-pick-project-card]').forEach(el => el.addEventListener('focusin', () => { const id = el.getAttribute('data-pick-project-card'); if (ui.drawerProjectId !== id) { ui.drawerProjectId = id; const head = document.querySelector('#drawer-root .drawer-head'); if (head) { /* keep typing: refresh the header only */ const tmp = document.createElement('div'); tmp.innerHTML = drawerHeadHtml(c, ''); head.replaceWith(tmp.firstElementChild); bindDrawerHeadHandlersOnly(c); } } }));
   document.querySelectorAll('[data-action="quick-log"]').forEach(el => el.addEventListener('click', () => {
     const channel = ui.quickLogChannel || 'call';
@@ -10823,6 +10867,60 @@ function bindDrawerHandlers() {
       if (ui.page === 'contacts') renderPage();
       renderContactDrawer();
       toast('Company contact removed.');
+    });
+  });
+
+  // Addresses
+  const openAddressEditor = (existing) => {
+    const labelOptions = [...ADDRESS_LABELS, ...(existing?.label && !ADDRESS_LABELS.includes(existing.label) ? [existing.label] : [])];
+    openModal({
+      title: existing ? 'Edit address' : 'Add address',
+      subtitle: 'Kept with the lead, next to the people at the company.',
+      fields: [
+        { key:'label', label:'What is this address', type:'select', value: existing?.label || 'Office', options: labelOptions.map(l => ({ value:l, label:l })) },
+        { key:'street', label:'Street', type:'text', value: existing?.street || '', placeholder:'Street and number, suite / floor' },
+        { key:'city', label:'City', type:'text', value: existing?.city || '', placeholder:'City' },
+        { key:'state', label:'State / region', type:'text', value: existing?.state || '', placeholder:'e.g. FL' },
+        { key:'zip', label:'ZIP / postal code', type:'text', value: existing?.zip || '', placeholder:'ZIP' },
+        { key:'country', label:'Country', type:'text', value: existing?.country || '', placeholder:'Leave empty for USA' },
+        { key:'notes', label:'Notes', type:'textarea', rows:2, value: existing?.notes || '', placeholder:'Access, parking, delivery hours, who to ask for…' },
+      ],
+      submitLabel: existing ? 'Save address' : 'Add address',
+      onSubmit: values => {
+        const record = { id: existing?.id || cryptoId(), label: String(values.label || '').trim(), street: String(values.street || '').trim(), city: String(values.city || '').trim(), state: String(values.state || '').trim(), zip: String(values.zip || '').trim(), country: String(values.country || '').trim(), notes: String(values.notes || '').trim() };
+        if (!addressOneLine(record)) { toast('Enter at least the street or the city.'); return false; }
+        c.addresses = Array.isArray(c.addresses) ? c.addresses : [];
+        if (existing) { const i = c.addresses.findIndex(item => item.id === existing.id); if (i >= 0) c.addresses[i] = record; else c.addresses.push(record); }
+        else c.addresses.push(record);
+        ui.drawerAddressesOpen = true;
+        saveState();
+        if (ui.page === 'contacts') renderPage();
+        renderContactDrawer();
+        toast(existing ? 'Address updated.' : 'Address added.');
+      },
+    });
+  };
+  const addAddress = document.querySelector('[data-action="add-address"]');
+  if (addAddress) addAddress.addEventListener('click', () => openAddressEditor(null));
+  document.querySelectorAll('[data-action="edit-address"]').forEach(el => el.addEventListener('click', () => {
+    const a = (c.addresses || []).find(item => item.id === el.getAttribute('data-id'));
+    if (a) openAddressEditor(a);
+  }));
+  document.querySelectorAll('[data-action="copy-address"]').forEach(el => el.addEventListener('click', async () => {
+    const a = (c.addresses || []).find(item => item.id === el.getAttribute('data-id'));
+    if (!a) return;
+    try { await navigator.clipboard.writeText(addressOneLine(a)); toast('Address copied.'); } catch (e) { toast(addressOneLine(a)); }
+  }));
+  document.querySelectorAll('[data-action="delete-address"]').forEach(el => {
+    el.addEventListener('click', () => {
+      const a = (c.addresses || []).find(item => item.id === el.getAttribute('data-id'));
+      if (!a || !confirm(`Delete the ${a.label || ''} address ${addressOneLine(a)}?`)) return;
+      recordDeletion(a.id);
+      c.addresses = (c.addresses || []).filter(item => item.id !== a.id);
+      saveState();
+      if (ui.page === 'contacts') renderPage();
+      renderContactDrawer();
+      toast('Address removed.');
     });
   });
 
@@ -11560,7 +11658,7 @@ function isBlankContact(c) {
   if (!c || (c.name !== 'New contact' && c.name !== 'New project')) return false;
   const emptyText = ['pointOfContact','email','phone','company','role','website','statusReason','nextStep','notes','campaignName']
     .every(key => !String(c[key] || '').trim());
-  const emptyArrays = ['tags','subcontacts','meetings','calls','renders','renderRequests','orders','sales','projectLabels','projects']
+  const emptyArrays = ['tags','subcontacts','addresses','meetings','calls','renders','renderRequests','orders','sales','projectLabels','projects']
     .every(key => !(c[key] && c[key].length));
   const untouchedDefaults = (c.status || 'Warm') === 'Warm' && (c.leadSource || 'Regular') === 'Regular'
     && !c.nextActionDue && !c.onHoldUntil && !c.category;
@@ -12091,6 +12189,7 @@ function downloadWorkbook(filename, sheets) {
 function exportContactsXlsx() {
   const contacts = [];
   const subcontacts = [];
+  const addresses = [];
   const communications = [];
   const meetings = [];
   const sales = [];
@@ -12127,10 +12226,22 @@ function exportContactsXlsx() {
       'Created at': c.createdAt || '',
       Meetings: (c.meetings || []).length,
       'Additional company contacts': (c.subcontacts || []).length,
+      Addresses: (c.addresses || []).map(a => `${a.label ? `${a.label}: ` : ''}${addressOneLine(a)}`).join(' | '),
       'Communication logs': (c.calls || []).length,
       Estimates: estimateSetCount(c.sales || []),
       'Sold estimates': (c.sales || []).filter(s => saleIsSold(s)).length,
       'Sold value (USD)': (c.sales || []).filter(s => saleIsSold(s)).reduce((total, s) => total + Number(s.amount || 0), 0),
+    });
+    for (const a of (c.addresses || [])) addresses.push({
+      ...contactBase,
+      'Address ID': a.id || '',
+      Label: a.label || '',
+      Street: a.street || '',
+      City: a.city || '',
+      'State / region': a.state || '',
+      'ZIP / postal code': a.zip || '',
+      Country: a.country || '',
+      Notes: a.notes || '',
     });
     for (const person of (c.subcontacts || [])) subcontacts.push({
       ...contactBase,
@@ -12198,6 +12309,7 @@ function exportContactsXlsx() {
   downloadWorkbook(`lumexa-contacts-${exportStamp()}.xlsx`, [
     { name:'Contacts', rows:contacts },
     { name:'Company contacts', rows:subcontacts },
+    { name:'Addresses', rows:addresses },
     { name:'Communications', rows:communications },
     { name:'Meetings', rows:meetings },
     { name:'Estimates & sales', rows:sales },
@@ -12622,6 +12734,7 @@ function svgIcon(name) {
     case 'star':  return wrap(`<path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9L12 16.9l-5.3 2.8 1.1-5.9-4.3-4.1 5.9-.8z"/>`);
     case 'grid':  return wrap(`<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>`);
     case 'folder': return wrap(`<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>`);
+    case 'map': return wrap(`<path d="M12 21s-6-5.3-6-10a6 6 0 0 1 12 0c0 4.7-6 10-6 10z"/><circle cx="12" cy="11" r="2.2"/>`);
     case 'columns': return wrap(`<rect x="3" y="4" width="5" height="16" rx="1"/><rect x="10" y="4" width="5" height="16" rx="1"/><rect x="17" y="4" width="4" height="16" rx="1"/>`);
     case 'calendar': return wrap(`<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/><path d="M8 14h2M14 14h2M8 18h2M14 18h2"/>`);
     case 'shield': return wrap(`<path d="M12 3l8 3v5c0 5-3.3 8.4-8 10-4.7-1.6-8-5-8-10V6l8-3z"/><path d="M9 12l2 2 4-4"/>`);
