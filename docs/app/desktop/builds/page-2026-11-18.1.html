@@ -1462,7 +1462,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
 const STORAGE_KEY = 'lumexa_crm_state_v2';
 const CLOUD_BASE_STORAGE_KEY = 'lumexa_crm_cloud_base_v1';
-const CRM_BUILD_BADGE = 'build 2026-11-17.9';
+const CRM_BUILD_BADGE = 'build 2026-11-18.1';
 /* ----------------- time zone -----------------
    Every day, week and month boundary and every displayed time follows the workspace time zone
    (Settings → Workspace), Miami by default, so the whole team sees one calendar wherever a
@@ -1646,25 +1646,99 @@ function cryptoId() { return 'x' + Math.random().toString(36).slice(2, 10) + Dat
 // "+1 305 555 0100" and "1-305-555-0100" are the same number. Numbers typed without a country code
 // are read as the workspace's default country (Settings → Identity); any number may carry its own
 // code with a leading "+" (or "00"). Stored numbers are written back in one consistent format.
+// Every ITU calling code. Countries that share one code are one entry (United States / Canada,
+// Russia / Kazakhstan, …). North American Numbering Plan territories (Bahamas, Jamaica, Puerto Rico, …)
+// share "+1" with an area code of their own, so they carry a four-digit code like "1242"; `codes`
+// lists the extra area codes a country has (Dominican Republic 809 / 829 / 849).
+const PHONE_FAVOURITE_CODES = ['1', '44', '420', '421', '49'];
 const PHONE_COUNTRIES = [
-  { code:'1', iso:'US', name:'United States / Canada' }, { code:'44', iso:'GB', name:'United Kingdom' },
-  { code:'420', iso:'CZ', name:'Czech Republic' }, { code:'421', iso:'SK', name:'Slovakia' },
-  { code:'49', iso:'DE', name:'Germany' }, { code:'43', iso:'AT', name:'Austria' }, { code:'41', iso:'CH', name:'Switzerland' },
-  { code:'33', iso:'FR', name:'France' }, { code:'34', iso:'ES', name:'Spain' }, { code:'39', iso:'IT', name:'Italy' },
-  { code:'31', iso:'NL', name:'Netherlands' }, { code:'32', iso:'BE', name:'Belgium' }, { code:'352', iso:'LU', name:'Luxembourg' },
-  { code:'48', iso:'PL', name:'Poland' }, { code:'36', iso:'HU', name:'Hungary' }, { code:'40', iso:'RO', name:'Romania' },
-  { code:'351', iso:'PT', name:'Portugal' }, { code:'353', iso:'IE', name:'Ireland' },
-  { code:'45', iso:'DK', name:'Denmark' }, { code:'46', iso:'SE', name:'Sweden' }, { code:'47', iso:'NO', name:'Norway' }, { code:'358', iso:'FI', name:'Finland' },
-  { code:'30', iso:'GR', name:'Greece' }, { code:'90', iso:'TR', name:'Turkey' }, { code:'972', iso:'IL', name:'Israel' },
-  { code:'971', iso:'AE', name:'United Arab Emirates' }, { code:'966', iso:'SA', name:'Saudi Arabia' }, { code:'974', iso:'QA', name:'Qatar' },
-  { code:'52', iso:'MX', name:'Mexico' }, { code:'55', iso:'BR', name:'Brazil' }, { code:'54', iso:'AR', name:'Argentina' },
-  { code:'57', iso:'CO', name:'Colombia' }, { code:'56', iso:'CL', name:'Chile' }, { code:'51', iso:'PE', name:'Peru' },
-  { code:'61', iso:'AU', name:'Australia' }, { code:'64', iso:'NZ', name:'New Zealand' },
-  { code:'81', iso:'JP', name:'Japan' }, { code:'82', iso:'KR', name:'South Korea' }, { code:'86', iso:'CN', name:'China' },
-  { code:'91', iso:'IN', name:'India' }, { code:'65', iso:'SG', name:'Singapore' }, { code:'852', iso:'HK', name:'Hong Kong' },
-  { code:'27', iso:'ZA', name:'South Africa' }, { code:'7', iso:'RU', name:'Russia / Kazakhstan' },
+  { code:'93', iso:'AF', name:'Afghanistan' }, { code:'355', iso:'AL', name:'Albania' }, { code:'213', iso:'DZ', name:'Algeria' },
+  { code:'1684', iso:'AS', name:'American Samoa' }, { code:'376', iso:'AD', name:'Andorra' }, { code:'244', iso:'AO', name:'Angola' },
+  { code:'1264', iso:'AI', name:'Anguilla' }, { code:'1268', iso:'AG', name:'Antigua and Barbuda' }, { code:'54', iso:'AR', name:'Argentina' },
+  { code:'374', iso:'AM', name:'Armenia' }, { code:'297', iso:'AW', name:'Aruba' }, { code:'247', iso:'AC', name:'Ascension Island' },
+  { code:'61', iso:'AU', name:'Australia (incl. Christmas and Cocos Islands)' }, { code:'43', iso:'AT', name:'Austria' }, { code:'994', iso:'AZ', name:'Azerbaijan' },
+  { code:'1242', iso:'BS', name:'Bahamas' }, { code:'973', iso:'BH', name:'Bahrain' }, { code:'880', iso:'BD', name:'Bangladesh' },
+  { code:'1246', iso:'BB', name:'Barbados' }, { code:'375', iso:'BY', name:'Belarus' }, { code:'32', iso:'BE', name:'Belgium' },
+  { code:'501', iso:'BZ', name:'Belize' }, { code:'229', iso:'BJ', name:'Benin' }, { code:'1441', iso:'BM', name:'Bermuda' },
+  { code:'975', iso:'BT', name:'Bhutan' }, { code:'591', iso:'BO', name:'Bolivia' }, { code:'387', iso:'BA', name:'Bosnia and Herzegovina' },
+  { code:'267', iso:'BW', name:'Botswana' }, { code:'55', iso:'BR', name:'Brazil' }, { code:'246', iso:'IO', name:'British Indian Ocean Territory (Diego Garcia)' },
+  { code:'1284', iso:'VG', name:'British Virgin Islands' }, { code:'673', iso:'BN', name:'Brunei' }, { code:'359', iso:'BG', name:'Bulgaria' },
+  { code:'226', iso:'BF', name:'Burkina Faso' }, { code:'257', iso:'BI', name:'Burundi' }, { code:'855', iso:'KH', name:'Cambodia' },
+  { code:'237', iso:'CM', name:'Cameroon' }, { code:'238', iso:'CV', name:'Cape Verde' }, { code:'1345', iso:'KY', name:'Cayman Islands' },
+  { code:'236', iso:'CF', name:'Central African Republic' }, { code:'235', iso:'TD', name:'Chad' }, { code:'56', iso:'CL', name:'Chile' },
+  { code:'86', iso:'CN', name:'China' }, { code:'57', iso:'CO', name:'Colombia' }, { code:'269', iso:'KM', name:'Comoros' },
+  { code:'242', iso:'CG', name:'Congo (Brazzaville)' }, { code:'243', iso:'CD', name:'Congo, Democratic Republic (Kinshasa)' }, { code:'682', iso:'CK', name:'Cook Islands' },
+  { code:'506', iso:'CR', name:'Costa Rica' }, { code:'225', iso:'CI', name:'Côte d’Ivoire' }, { code:'385', iso:'HR', name:'Croatia' },
+  { code:'53', iso:'CU', name:'Cuba' }, { code:'599', iso:'CW', name:'Curaçao / Caribbean Netherlands' }, { code:'357', iso:'CY', name:'Cyprus' },
+  { code:'420', iso:'CZ', name:'Czech Republic' }, { code:'45', iso:'DK', name:'Denmark' }, { code:'253', iso:'DJ', name:'Djibouti' },
+  { code:'1767', iso:'DM', name:'Dominica' }, { code:'1809', codes:['1829', '1849'], iso:'DO', name:'Dominican Republic' }, { code:'593', iso:'EC', name:'Ecuador' },
+  { code:'20', iso:'EG', name:'Egypt' }, { code:'503', iso:'SV', name:'El Salvador' }, { code:'240', iso:'GQ', name:'Equatorial Guinea' },
+  { code:'291', iso:'ER', name:'Eritrea' }, { code:'372', iso:'EE', name:'Estonia' }, { code:'268', iso:'SZ', name:'Eswatini (Swaziland)' },
+  { code:'251', iso:'ET', name:'Ethiopia' }, { code:'500', iso:'FK', name:'Falkland Islands / South Georgia' }, { code:'298', iso:'FO', name:'Faroe Islands' },
+  { code:'679', iso:'FJ', name:'Fiji' }, { code:'358', iso:'FI', name:'Finland / Åland Islands' }, { code:'33', iso:'FR', name:'France' },
+  { code:'594', iso:'GF', name:'French Guiana' }, { code:'689', iso:'PF', name:'French Polynesia' }, { code:'241', iso:'GA', name:'Gabon' },
+  { code:'220', iso:'GM', name:'Gambia' }, { code:'995', iso:'GE', name:'Georgia' }, { code:'49', iso:'DE', name:'Germany' },
+  { code:'233', iso:'GH', name:'Ghana' }, { code:'350', iso:'GI', name:'Gibraltar' }, { code:'30', iso:'GR', name:'Greece' },
+  { code:'299', iso:'GL', name:'Greenland' }, { code:'1473', iso:'GD', name:'Grenada' }, { code:'590', iso:'GP', name:'Guadeloupe / Saint Barthélemy / Saint Martin' },
+  { code:'1671', iso:'GU', name:'Guam' }, { code:'502', iso:'GT', name:'Guatemala' }, { code:'224', iso:'GN', name:'Guinea' },
+  { code:'245', iso:'GW', name:'Guinea-Bissau' }, { code:'592', iso:'GY', name:'Guyana' }, { code:'509', iso:'HT', name:'Haiti' },
+  { code:'504', iso:'HN', name:'Honduras' }, { code:'852', iso:'HK', name:'Hong Kong' }, { code:'36', iso:'HU', name:'Hungary' },
+  { code:'354', iso:'IS', name:'Iceland' }, { code:'91', iso:'IN', name:'India' }, { code:'62', iso:'ID', name:'Indonesia' },
+  { code:'98', iso:'IR', name:'Iran' }, { code:'964', iso:'IQ', name:'Iraq' }, { code:'353', iso:'IE', name:'Ireland' },
+  { code:'972', iso:'IL', name:'Israel' }, { code:'39', iso:'IT', name:'Italy / Vatican City' }, { code:'1876', codes:['1658'], iso:'JM', name:'Jamaica' },
+  { code:'81', iso:'JP', name:'Japan' }, { code:'962', iso:'JO', name:'Jordan' }, { code:'254', iso:'KE', name:'Kenya' },
+  { code:'686', iso:'KI', name:'Kiribati' }, { code:'383', iso:'XK', name:'Kosovo' }, { code:'965', iso:'KW', name:'Kuwait' },
+  { code:'996', iso:'KG', name:'Kyrgyzstan' }, { code:'856', iso:'LA', name:'Laos' }, { code:'371', iso:'LV', name:'Latvia' },
+  { code:'961', iso:'LB', name:'Lebanon' }, { code:'266', iso:'LS', name:'Lesotho' }, { code:'231', iso:'LR', name:'Liberia' },
+  { code:'218', iso:'LY', name:'Libya' }, { code:'423', iso:'LI', name:'Liechtenstein' }, { code:'370', iso:'LT', name:'Lithuania' },
+  { code:'352', iso:'LU', name:'Luxembourg' }, { code:'853', iso:'MO', name:'Macau' }, { code:'261', iso:'MG', name:'Madagascar' },
+  { code:'265', iso:'MW', name:'Malawi' }, { code:'60', iso:'MY', name:'Malaysia' }, { code:'960', iso:'MV', name:'Maldives' },
+  { code:'223', iso:'ML', name:'Mali' }, { code:'356', iso:'MT', name:'Malta' }, { code:'692', iso:'MH', name:'Marshall Islands' },
+  { code:'596', iso:'MQ', name:'Martinique' }, { code:'222', iso:'MR', name:'Mauritania' }, { code:'230', iso:'MU', name:'Mauritius' },
+  { code:'52', iso:'MX', name:'Mexico' }, { code:'691', iso:'FM', name:'Micronesia' }, { code:'373', iso:'MD', name:'Moldova' },
+  { code:'377', iso:'MC', name:'Monaco' }, { code:'976', iso:'MN', name:'Mongolia' }, { code:'382', iso:'ME', name:'Montenegro' },
+  { code:'1664', iso:'MS', name:'Montserrat' }, { code:'212', iso:'MA', name:'Morocco / Western Sahara' }, { code:'258', iso:'MZ', name:'Mozambique' },
+  { code:'95', iso:'MM', name:'Myanmar' }, { code:'264', iso:'NA', name:'Namibia' }, { code:'674', iso:'NR', name:'Nauru' },
+  { code:'977', iso:'NP', name:'Nepal' }, { code:'31', iso:'NL', name:'Netherlands' }, { code:'687', iso:'NC', name:'New Caledonia' },
+  { code:'64', iso:'NZ', name:'New Zealand' }, { code:'505', iso:'NI', name:'Nicaragua' }, { code:'227', iso:'NE', name:'Niger' },
+  { code:'234', iso:'NG', name:'Nigeria' }, { code:'683', iso:'NU', name:'Niue' }, { code:'672', iso:'NF', name:'Norfolk Island' },
+  { code:'850', iso:'KP', name:'North Korea' }, { code:'389', iso:'MK', name:'North Macedonia' }, { code:'1670', iso:'MP', name:'Northern Mariana Islands' },
+  { code:'47', iso:'NO', name:'Norway / Svalbard' }, { code:'968', iso:'OM', name:'Oman' }, { code:'92', iso:'PK', name:'Pakistan' },
+  { code:'680', iso:'PW', name:'Palau' }, { code:'970', iso:'PS', name:'Palestine' }, { code:'507', iso:'PA', name:'Panama' },
+  { code:'675', iso:'PG', name:'Papua New Guinea' }, { code:'595', iso:'PY', name:'Paraguay' }, { code:'51', iso:'PE', name:'Peru' },
+  { code:'63', iso:'PH', name:'Philippines' }, { code:'48', iso:'PL', name:'Poland' }, { code:'351', iso:'PT', name:'Portugal' },
+  { code:'1787', codes:['1939'], iso:'PR', name:'Puerto Rico' }, { code:'974', iso:'QA', name:'Qatar' }, { code:'262', iso:'RE', name:'Réunion / Mayotte' },
+  { code:'40', iso:'RO', name:'Romania' }, { code:'7', iso:'RU', name:'Russia / Kazakhstan' }, { code:'250', iso:'RW', name:'Rwanda' },
+  { code:'290', iso:'SH', name:'Saint Helena / Tristan da Cunha' }, { code:'1869', iso:'KN', name:'Saint Kitts and Nevis' }, { code:'1758', iso:'LC', name:'Saint Lucia' },
+  { code:'508', iso:'PM', name:'Saint Pierre and Miquelon' }, { code:'1784', iso:'VC', name:'Saint Vincent and the Grenadines' }, { code:'685', iso:'WS', name:'Samoa' },
+  { code:'378', iso:'SM', name:'San Marino' }, { code:'239', iso:'ST', name:'São Tomé and Príncipe' }, { code:'966', iso:'SA', name:'Saudi Arabia' },
+  { code:'221', iso:'SN', name:'Senegal' }, { code:'381', iso:'RS', name:'Serbia' }, { code:'248', iso:'SC', name:'Seychelles' },
+  { code:'232', iso:'SL', name:'Sierra Leone' }, { code:'65', iso:'SG', name:'Singapore' }, { code:'1721', iso:'SX', name:'Sint Maarten' },
+  { code:'421', iso:'SK', name:'Slovakia' }, { code:'386', iso:'SI', name:'Slovenia' }, { code:'677', iso:'SB', name:'Solomon Islands' },
+  { code:'252', iso:'SO', name:'Somalia' }, { code:'27', iso:'ZA', name:'South Africa' }, { code:'82', iso:'KR', name:'South Korea' },
+  { code:'211', iso:'SS', name:'South Sudan' }, { code:'34', iso:'ES', name:'Spain' }, { code:'94', iso:'LK', name:'Sri Lanka' },
+  { code:'249', iso:'SD', name:'Sudan' }, { code:'597', iso:'SR', name:'Suriname' }, { code:'46', iso:'SE', name:'Sweden' },
+  { code:'41', iso:'CH', name:'Switzerland' }, { code:'963', iso:'SY', name:'Syria' }, { code:'886', iso:'TW', name:'Taiwan' },
+  { code:'992', iso:'TJ', name:'Tajikistan' }, { code:'255', iso:'TZ', name:'Tanzania' }, { code:'66', iso:'TH', name:'Thailand' },
+  { code:'670', iso:'TL', name:'Timor-Leste' }, { code:'228', iso:'TG', name:'Togo' }, { code:'690', iso:'TK', name:'Tokelau' },
+  { code:'676', iso:'TO', name:'Tonga' }, { code:'1868', iso:'TT', name:'Trinidad and Tobago' }, { code:'216', iso:'TN', name:'Tunisia' },
+  { code:'90', iso:'TR', name:'Turkey' }, { code:'993', iso:'TM', name:'Turkmenistan' }, { code:'1649', iso:'TC', name:'Turks and Caicos Islands' },
+  { code:'688', iso:'TV', name:'Tuvalu' }, { code:'256', iso:'UG', name:'Uganda' }, { code:'380', iso:'UA', name:'Ukraine' },
+  { code:'971', iso:'AE', name:'United Arab Emirates' }, { code:'44', iso:'GB', name:'United Kingdom (incl. Guernsey, Jersey, Isle of Man)' }, { code:'1', iso:'US', name:'United States / Canada' },
+  { code:'598', iso:'UY', name:'Uruguay' }, { code:'1340', iso:'VI', name:'U.S. Virgin Islands' }, { code:'998', iso:'UZ', name:'Uzbekistan' },
+  { code:'678', iso:'VU', name:'Vanuatu' }, { code:'58', iso:'VE', name:'Venezuela' }, { code:'84', iso:'VN', name:'Vietnam' },
+  { code:'681', iso:'WF', name:'Wallis and Futuna' }, { code:'967', iso:'YE', name:'Yemen' }, { code:'260', iso:'ZM', name:'Zambia' },
+  { code:'263', iso:'ZW', name:'Zimbabwe' },
 ];
-const PHONE_CC_BY_LENGTH = PHONE_COUNTRIES.slice().sort((a, b) => b.code.length - a.code.length);
+// Every dialable code (including the extra area codes), longest first so "+1 242" wins over "+1".
+const PHONE_CC_BY_LENGTH = PHONE_COUNTRIES.flatMap(c => [c.code, ...(c.codes || [])]).map(code => ({ code })).sort((a, b) => b.code.length - a.code.length);
+const PHONE_COUNTRY_BY_CODE = new Map(PHONE_COUNTRIES.flatMap(c => [c.code, ...(c.codes || [])].map(code => [code, c])));
+// The list entry for a dial code ('1829' → Dominican Republic), or null.
+function phoneCountryFor(cc) { return PHONE_COUNTRY_BY_CODE.get(String(cc || '')) || null; }
+// A NANP area code → its territory's four-digit code ('242' → '1242'); '' for plain US / Canada codes.
+function nanpTerritoryCode(area) { const c = '1' + String(area || ''); return c.length === 4 && PHONE_COUNTRY_BY_CODE.has(c) ? c : ''; }
+// "+1 242" for display; "+420" for everything else.
+function phoneDialLabel(code) { const c = String(code || ''); return /^1\d{3}$/.test(c) ? `+1 ${c.slice(1)}` : `+${c}`; }
 function defaultCountryCode() {
   const v = String((state && state.workspaceSettings && state.workspaceSettings.defaultCountryCode) || '1').replace(/\D/g, '');
   return v || '1';
@@ -1677,7 +1751,9 @@ function phoneParts(raw) {
 }
 // → { cc, national, ext } or null. cc is '' when the text is too short or carries an unknown code.
 function parsePhone(raw, assumeCc) {
-  const def = String(assumeCc || defaultCountryCode());
+  let def = String(assumeCc || defaultCountryCode());
+  const nanpDefault = /^1\d{3}$/.test(def) ? def : ''; // a Caribbean / Pacific "+1" territory: dial like the US
+  if (nanpDefault) def = '1';
   let text = String(raw || '').trim();
   if (!text) return null;
   let ext = '';
@@ -1690,9 +1766,12 @@ function parsePhone(raw, assumeCc) {
   else if (digits.startsWith('00') && digits.length > 10) { digits = digits.slice(2); explicit = true; }
   else if (digits.startsWith('011') && digits.length > 11 && def === '1') { digits = digits.slice(3); explicit = true; }
   const split = (d) => { const cc = PHONE_CC_BY_LENGTH.find(c => d.startsWith(c.code) && d.length > c.code.length + 5); return cc ? { cc: cc.code, national: d.slice(cc.code.length), ext } : null; };
+  // A ten-digit NANP number: a territory of its own when the area code says so, otherwise US / Canada.
+  const nanp = (d10) => { const t = nanpTerritoryCode(d10.slice(0, 3)); return t ? { cc: t, national: d10.slice(3), ext } : { cc: '1', national: d10, ext }; };
   if (explicit) return split(digits) || { cc: '', national: digits, ext };
-  if (def === '1' && digits.length === 11 && digits[0] === '1') return { cc: '1', national: digits.slice(1), ext };
-  if (def === '1' && digits.length === 10) return { cc: '1', national: digits, ext };
+  if (def === '1' && digits.length === 11 && digits[0] === '1') return nanp(digits.slice(1));
+  if (def === '1' && digits.length === 10) return nanp(digits);
+  if (nanpDefault && digits.length === 7) return { cc: nanpDefault, national: digits, ext };
   if (digits.length > 10) { const s = split(digits); if (s) return s; }
   if (def !== '1') {
     if (digits.startsWith(def) && digits.length > def.length + 6) return { cc: def, national: digits.slice(def.length), ext };
@@ -1725,11 +1804,15 @@ function formatPhone(raw, assumeCc) {
     const local = `(${p.national.slice(0, 3)}) ${p.national.slice(3, 6)}-${p.national.slice(6)}`;
     return (defaultCountryCode() === '1' ? local : `+1 ${local}`) + extra;
   }
+  if (/^1\d{3}$/.test(p.cc) && p.national.length === 7) return `+1 (${p.cc.slice(1)}) ${p.national.slice(0, 3)}-${p.national.slice(3)}${extra}`;
   return `+${p.cc} ${groupPhoneDigits(p.national)}${extra}`;
 }
 function phoneCountryOptionsHtml(selectedCc) {
-  const sel = String(selectedCc || defaultCountryCode());
-  return PHONE_COUNTRIES.map(c => `<option value="${c.code}" ${c.code === sel ? 'selected' : ''} title="${esc(c.name)}">+${c.code} ${esc(c.iso)}</option>`).join('');
+  const selected = phoneCountryFor(selectedCc || defaultCountryCode()) || phoneCountryFor('1');
+  const favourites = PHONE_FAVOURITE_CODES.map(code => phoneCountryFor(code)).filter(Boolean);
+  const rest = PHONE_COUNTRIES.filter(c => !favourites.includes(c)).slice().sort((a, b) => a.name.localeCompare(b.name));
+  const option = (c) => `<option value="${c.code}" ${c === selected ? 'selected' : ''} title="${esc(c.name)}">${phoneDialLabel(c.code)} ${esc(c.iso)} · ${esc(c.name)}</option>`;
+  return favourites.map(option).join('') + '<option disabled>──────────</option>' + rest.map(option).join('');
 }
 
 /* ----------------- duplicate leads ----------------- */
@@ -3023,6 +3106,18 @@ function mergeWithDefaults(incoming) {
         phone: person.phone || '',
         notes: person.notes || '',
       })) : [];
+      // Addresses: office, showroom, delivery / installation site… each a labelled block, kept
+      // beside the lead like the company's people.
+      c.addresses = Array.isArray(c.addresses) ? c.addresses.filter(a => a && typeof a === 'object').map(a => ({
+        id: a.id || cryptoId(),
+        label: typeof a.label === 'string' ? a.label : '',
+        street: typeof a.street === 'string' ? a.street : '',
+        city: typeof a.city === 'string' ? a.city : '',
+        state: typeof a.state === 'string' ? a.state : '',
+        zip: typeof a.zip === 'string' ? a.zip : '',
+        country: typeof a.country === 'string' ? a.country : '',
+        notes: typeof a.notes === 'string' ? a.notes : '',
+      })) : [];
       c.calls = Array.isArray(c.calls) ? c.calls.map(log => ({
         ...log,
         id: log?.id || cryptoId(),
@@ -3109,6 +3204,11 @@ function mergeWithDefaults(incoming) {
         id: meeting?.id || cryptoId(),
         createdByUserId: typeof meeting?.createdByUserId === 'string' ? meeting.createdByUserId : '',
         type: MEETING_TYPES[meeting?.type] ? meeting.type : '',
+        outcome: meeting?.outcome === 'missed' ? 'missed' : (meeting?.completed || meeting?.outcome === 'completed' ? 'completed' : ''),
+        completed: meeting?.outcome === 'missed' ? false : !!(meeting?.completed || meeting?.outcome === 'completed'),
+        missReason: meeting?.outcome === 'missed' && typeof meeting?.missReason === 'string' ? meeting.missReason : '',
+        missNote: meeting?.outcome === 'missed' && typeof meeting?.missNote === 'string' ? meeting.missNote : '',
+        reschedules: Array.isArray(meeting?.reschedules) ? meeting.reschedules.filter(r => r && typeof r === 'object') : [],
       })) : [];
       c.sales = Array.isArray(c.sales) ? c.sales.map(sale => {
         const status = sale?.status === 'paid' ? 'paid' : (sale?.status === 'partial' ? 'partial' : (sale?.status === 'declined' ? 'declined' : (sale?.status === 'not_selected' ? 'not_selected' : 'pending')));
@@ -3291,7 +3391,7 @@ function mergeWithDefaults(incoming) {
     if (Array.isArray(merged.contacts)) {
       merged.contacts = alive(merged.contacts);
       for (const c of merged.contacts) {
-        for (const field of ['calls', 'meetings', 'sales', 'renders', 'renderRequests', 'orders', 'subcontacts', 'files', 'projects']) c[field] = alive(c[field]);
+        for (const field of ['calls', 'meetings', 'sales', 'renders', 'renderRequests', 'orders', 'subcontacts', 'addresses', 'files', 'projects']) c[field] = alive(c[field]);
         for (const sale of (c.sales || [])) {
           if (!Array.isArray(sale.payments) || !sale.payments.length) continue;
           const before = sale.payments.length; sale.payments = alive(sale.payments);
@@ -3405,7 +3505,7 @@ function computeTomorrowPriorities(asOfIso) {
 
     // Bonuses
     if (c.nextStep && c.nextStep.trim()) score += 20;
-    const hasUpcomingMeeting = (c.meetings || []).some(m => !m.completed && m.scheduledOn && new Date(m.scheduledOn).getTime() > asOfMs);
+    const hasUpcomingMeeting = (c.meetings || []).some(m => meetingUpcoming(m) && m.scheduledOn && new Date(m.scheduledOn).getTime() > asOfMs);
     if (hasUpcomingMeeting) score += 30;
 
     // Build reason
@@ -3842,7 +3942,7 @@ async function cloudLoadTeamData() {
 
 // Port of the old server's crm_audit_changes, computed from the records a save actually changed.
 const CLOUD_AUDIT_CONTACT_FIELDS = { name:'Name', pointOfContact:'Point of contact', email:'Email', phone:'Phone', company:'Company', role:'Role', website:'Website', status:'Status', statusReason:'Status reason', leadType:'Lead type', leadSource:'Lead source', campaignName:'Campaign name', brand:'Brand', nextStep:'Next step', nextActionDue:'Next action date', onHoldUntil:'On Hold follow-up', tags:'Tags', notes:'Notes' };
-const CLOUD_AUDIT_CONTACT_LISTS = [['subcontacts','Company contacts'], ['meetings','Meetings'], ['calls','Communication log'], ['files','Customer files'], ['projects','Projects'], ['orders','Production orders'], ['renders','Renders'], ['renderRequests','Render requests']];
+const CLOUD_AUDIT_CONTACT_LISTS = [['subcontacts','Company contacts'], ['addresses','Addresses'], ['meetings','Meetings'], ['calls','Communication log'], ['files','Customer files'], ['projects','Projects'], ['orders','Production orders'], ['renders','Renders'], ['renderRequests','Render requests']];
 const CLOUD_AUDIT_KINDS = { calendarEvent:'Calendar', task:'Automations', dailyReport:'Daily reports', weeklyReport:'Weekly reports', monthlyReport:'Monthly reports', settings:'Payout settings', payRate:'Payout settings', payPlan:'Pay plans', workspaceSettings:'Workspace settings', leadCategory:'Lead categories', salesActivity:'Legacy financial activity' };
 function cloudAuditEntries(changes) {
   const same = (a, b) => JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
@@ -3933,7 +4033,7 @@ async function cloudImportBackup(parsed) {
 // from a web CRM backup. Only adds — a lead the cloud has never seen, or a meeting, call,
 // estimate, render, order, file, contact person or project the lead here does not have yet.
 // Never changes a value already in the cloud, never brings back what was deleted here.
-const ADD_MISSING_LISTS = { meetings: 'meetings', calls: 'calls', sales: 'estimates', renders: 'renders', renderRequests: 'render requests', orders: 'orders', files: 'files', subcontacts: 'contact people', projects: 'projects' };
+const ADD_MISSING_LISTS = { meetings: 'meetings', calls: 'calls', sales: 'estimates', renders: 'renders', renderRequests: 'render requests', orders: 'orders', files: 'files', subcontacts: 'contact people', addresses: 'addresses', projects: 'projects' };
 function missingFromBackup(parsed, live, map) {
   const cleaned = mergeWithDefaults(remapUserIds(parsed, map));
   const tomb = new Set((live.tombstones || []).map(t => t && String(t.id)));
@@ -4264,7 +4364,7 @@ function ensureRecordIds(s) {
   for (const c of (s.contacts || [])) {
     if (!c || typeof c !== 'object') continue;
     if (!c.id) c.id = cryptoId();
-    for (const f of ['calls','meetings','sales','renders','renderRequests','orders','subcontacts','ownershipHistory','files','projects']) {
+    for (const f of ['calls','meetings','sales','renders','renderRequests','orders','subcontacts','addresses','ownershipHistory','files','projects']) {
       for (const item of (c[f] || [])) if (item && typeof item === 'object' && !item.id) item.id = cryptoId();
     }
     for (const sale of (c.sales || [])) for (const pm of (sale && sale.payments) || []) if (pm && typeof pm === 'object' && !pm.id) pm.id = cryptoId();
@@ -5407,6 +5507,41 @@ function meetingTypeChip(m) {
   return t ? `<span class="chip ${t.chip}" data-meeting-type="${esc(m.type)}">${t.label}</span>` : '';
 }
 function meetingTypeLabel(m) { const t = MEETING_TYPES[m && m.type]; return t ? t.label : ''; }
+/* Meeting outcomes. `completed` stays the boolean every report and export already reads;
+   `outcome` adds the third state: '' (still to happen) · 'completed' · 'missed' (no-show, no
+   Zoom, cancelled…). A missed meeting can be rescheduled in place: the same record moves to the
+   new date and keeps the old one in `reschedules`, so it stays ONE meeting — booked once, paid
+   once. A genuinely new meeting is scheduled beside it as usual. */
+const MEETING_MISS_REASONS = { no_show: 'No-show', client_cancelled: 'Client cancelled', technical: 'Technical problem (no Zoom / call)', our_side: 'Our side could not make it', other: 'Other' };
+function meetingOutcome(m) { return m?.outcome === 'missed' ? 'missed' : (m?.completed || m?.outcome === 'completed' ? 'completed' : ''); }
+function meetingMissed(m) { return meetingOutcome(m) === 'missed'; }
+function meetingUpcoming(m) { return meetingOutcome(m) === ''; }
+function setMeetingOutcome(m, outcome, note) {
+  m.outcome = outcome === 'missed' || outcome === 'completed' ? outcome : '';
+  m.completed = m.outcome === 'completed';
+  if (m.outcome === 'missed') { if (typeof note === 'object' && note) { m.missReason = MEETING_MISS_REASONS[note.reason] ? note.reason : 'other'; m.missNote = String(note.note || '').trim(); } }
+  else { m.missReason = ''; m.missNote = ''; }
+}
+function meetingReschedules(m) { return Array.isArray(m?.reschedules) ? m.reschedules : []; }
+// Same meeting, new date: the old date goes into the history, the meeting is upcoming again.
+function rescheduleMeeting(m, newScheduledOn, note) {
+  if (!m || !newScheduledOn) return false;
+  m.reschedules = meetingReschedules(m).slice();
+  m.reschedules.push({ from: m.scheduledOn || '', to: newScheduledOn, at: new Date().toISOString(), reason: meetingMissed(m) ? (m.missReason || 'other') : '', note: String(note || m.missNote || '').trim(), byUserId: ui.currentUser?.id || '' });
+  m.scheduledOn = newScheduledOn;
+  setMeetingOutcome(m, '');
+  return true;
+}
+function meetingMissLabel(m) { return `${MEETING_MISS_REASONS[m?.missReason] || 'Did not happen'}${m?.missNote ? ` · ${m.missNote}` : ''}`; }
+function meetingOutcomeLabel(m) {
+  const o = meetingOutcome(m);
+  return o === 'completed' ? 'Completed' : (o === 'missed' ? `Did not happen · ${meetingMissLabel(m)}` : 'Scheduled');
+}
+const ADDRESS_LABELS = ['Office', 'Showroom', 'Delivery / installation site', 'Billing', 'Home', 'Other'];
+function addressOneLine(a) {
+  return [a?.street, [a?.city, a?.state].filter(Boolean).join(', '), a?.zip, a?.country].map(x => String(x || '').trim()).filter(Boolean).join(', ');
+}
+function addressMapUrl(a) { const q = addressOneLine(a); return q ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}` : ''; }
 function meetingTypeOptions(selected) { return Object.entries(MEETING_TYPES).map(([k, t]) => `<option value="${k}" ${selected === k ? 'selected' : ''}>${t.label}</option>`).join(''); }
 function initialsOf(name) {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
@@ -5881,7 +6016,7 @@ function calendarEntries() {
       entries.push({
         id:`meeting-${c.id}-${meeting.id}`, type:'meeting', date:localDateKey(meeting.scheduledOn), time,
         title:`Meeting · ${c.name || 'Contact'}`, notes:meeting.agenda || 'Meeting', contactId:c.id, meetingType: MEETING_TYPES[meeting.type] ? meeting.type : '',
-        completed:!!meeting.completed,
+        completed:!!meeting.completed, missed: meetingMissed(meeting),
       });
     }
   }
@@ -5929,7 +6064,7 @@ function renderCalendarEvent(entry, compact = false) {
     ? `data-calendar-contact="${esc(entry.contactId)}"`
     : `data-calendar-custom="${esc(entry.eventId)}"`;
   return `<button class="w-full text-left border rounded px-2 py-1 ${compact ? 'text-[10px]' : 'text-xs'} leading-tight hover:opacity-80" style="${calendarEventStyle(entry.type)}" ${action} title="${esc(entry.notes || entry.title)}">
-    <span class="calendar-type-label">${esc(calendarTypeLabel(entry.type))}</span>${entry.time ? `<span class="mono opacity-70 mr-1">${esc(entry.time)}</span>` : ''}${entry.meetingType ? `<span class="chip ${MEETING_TYPES[entry.meetingType].chip} mr-1" data-meeting-type="${esc(entry.meetingType)}" style="font-size:9px;padding:0 6px">${MEETING_TYPES[entry.meetingType].label}</span>` : ''}${esc(calendarDisplayTitle(entry))}${entry.completed ? ' ✓' : ''}
+    <span class="calendar-type-label">${esc(calendarTypeLabel(entry.type))}</span>${entry.time ? `<span class="mono opacity-70 mr-1">${esc(entry.time)}</span>` : ''}${entry.meetingType ? `<span class="chip ${MEETING_TYPES[entry.meetingType].chip} mr-1" data-meeting-type="${esc(entry.meetingType)}" style="font-size:9px;padding:0 6px">${MEETING_TYPES[entry.meetingType].label}</span>` : ''}${esc(calendarDisplayTitle(entry))}${entry.completed ? ' ✓' : (entry.missed ? ' ✕' : '')}
   </button>`;
 }
 
@@ -6012,7 +6147,7 @@ function renderCalendar() {
           const meta = nextActionDueMeta(entry.date);
           return `<div class="py-3 flex items-center gap-4">
             <div class="w-28 shrink-0"><div class="text-sm mono ${entry.date < today ? 'text-ember' : ''}">${esc(fmtDate(`${entry.date}T12:00:00`))}</div>${entry.time ? `<div class="text-xs text-ash mono mt-0.5">${esc(entry.time)}</div>` : (entry.date < today ? `<div class="text-[10px] text-ember mt-0.5">${esc(meta?.label || 'Overdue')}</div>` : '')}</div>
-            <div class="flex-1 min-w-0"><div class="font-semibold">${esc(calendarDisplayTitle(entry))}${entry.completed ? ' ✓' : ''}</div><div class="text-xs text-ash mt-0.5 truncate">${esc(entry.notes || 'No note')}</div></div>
+            <div class="flex-1 min-w-0"><div class="font-semibold">${esc(calendarDisplayTitle(entry))}${entry.completed ? ' ✓' : (entry.missed ? ' ✕ did not happen' : '')}</div><div class="text-xs text-ash mt-0.5 truncate">${esc(entry.notes || 'No note')}</div></div>
             <span class="border rounded px-2 py-1 text-[10px] mono uppercase inline-flex items-center gap-1" style="${calendarEventStyle(entry.type)}">${calendarTypeIcon(entry.type)}${esc(calendarTypeLabel(entry.type))}</span>
             ${entry.contactId ? `<button class="btn btn-ghost" data-calendar-contact="${esc(entry.contactId)}">Open</button>` : `<button class="btn btn-ghost" data-calendar-custom="${esc(entry.eventId)}">Edit</button><button class="btn btn-ghost" data-calendar-delete="${esc(entry.eventId)}" aria-label="Delete reminder">${svgIcon('trash')}</button>`}
           </div>`;
@@ -6053,7 +6188,7 @@ function renderDashboard() {
   const contacts = visibleContacts();
   const todayKey = localDateKey(new Date());
   const byTime = (a, b) => String(a.scheduledOn || '').localeCompare(String(b.scheduledOn || ''));
-  const meetings = allMeetings().filter(m => m.contactBrand === activeBrand() && !m.completed && m.scheduledOn);
+  const meetings = allMeetings().filter(m => m.contactBrand === activeBrand() && meetingUpcoming(m) && m.scheduledOn);
   const todayMeetings = meetings.filter(m => localDateKey(m.scheduledOn) === todayKey).sort(byTime);
   const upcoming = meetings.filter(m => localDateKey(m.scheduledOn) > todayKey).sort(byTime).slice(0, 5);
   const nextActions = [
@@ -6226,7 +6361,8 @@ function filterContacts() {
         || (c.pointOfContact && c.pointOfContact.toLowerCase().includes(q))
         || (c.campaignName && c.campaignName.toLowerCase().includes(q))
         || contactProjects(c).some(p => p.name && p.name.toLowerCase().includes(q))
-        || (c.subcontacts || []).some(person => [person.name, person.role, person.email, person.phone].some(value => String(value || '').toLowerCase().includes(q)));
+        || (c.subcontacts || []).some(person => [person.name, person.role, person.email, person.phone].some(value => String(value || '').toLowerCase().includes(q)))
+        || (c.addresses || []).some(a => addressOneLine(a).toLowerCase().includes(q) || String(a.label || '').toLowerCase().includes(q));
   }));
 }
 
@@ -7686,6 +7822,7 @@ function projectActivities(c) {
       timestamp,
       detail: meeting.agenda || '',
       completed: !!meeting.completed,
+      missed: meetingMissed(meeting),
     });
   }
   return activities.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
@@ -7693,7 +7830,7 @@ function projectActivities(c) {
 
 function projectActivityLabel(activity) {
   if (activity.kind === 'meeting') {
-    return `Meeting ${activity.completed ? 'completed' : 'scheduled'}${activity.detail ? ` · ${activity.detail}` : ''}`;
+    return `Meeting ${activity.completed ? 'completed' : (activity.missed ? 'did not happen' : 'scheduled')}${activity.detail ? ` · ${activity.detail}` : ''}`;
   }
   const channel = activity.channel === 'email' ? 'Email' : (activity.channel === 'whatsapp' ? 'WhatsApp' : 'Call');
   return `${channel} · ${communicationTouchLabel(activity)}${activity.detail ? ` · ${activity.detail}` : ''}`;
@@ -7954,7 +8091,7 @@ function leadConversationScore(c, incoming, startIso, endIso) {
   const openValue = estimateSets(openSales).reduce((sum, set) => sum + estimateSetValue(set), 0);
   if (openSales.length) { score += 25 + Math.min(25, openValue / 2000); reasons.push(`${fmtMoney(openValue)} in open estimates`); }
   const periodDay = startIso.slice(0,10);
-  const meetingBooked = (c.meetings || []).some(m => m && !m.completed && String(m.scheduledOn || '').slice(0,10) >= periodDay);
+  const meetingBooked = (c.meetings || []).some(m => m && meetingUpcoming(m) && String(m.scheduledOn || '').slice(0,10) >= periodDay);
   if (meetingBooked) { score += 20; reasons.push('meeting on the calendar'); }
   if (String(c.nextStep || '').trim()) { score += 10; reasons.push('next step set'); }
   if (incoming.length > 1) { score += Math.min(20, (incoming.length - 1) * 5); reasons.push(`reached in ${incoming.length}×`); }
@@ -8318,8 +8455,9 @@ function renderWeeklyReport() {
   });
   const scheduledThisWeek = allM.filter(m => (m.scheduledOn || '') >= startIso && (m.scheduledOn || '') <= endIso);
   const doneThisWeek = scheduledThisWeek.filter(m => m.completed);
-  const upcomingThisWeek = scheduledThisWeek.filter(m => !m.completed && new Date(m.scheduledOn) >= new Date());
-  const inProgressThisWeek = scheduledThisWeek.filter(m => !m.completed && new Date(m.scheduledOn) < new Date());
+  const upcomingThisWeek = scheduledThisWeek.filter(m => meetingUpcoming(m) && new Date(m.scheduledOn) >= new Date());
+  const inProgressThisWeek = scheduledThisWeek.filter(m => meetingUpcoming(m) && new Date(m.scheduledOn) < new Date());
+  const missedThisWeek = scheduledThisWeek.filter(meetingMissed);
 
   // Engagement: pool contacts with any activity (meeting or comm) during the week
   const poolIds = new Set(pool.map(c => c.id));
@@ -8432,7 +8570,7 @@ function renderWeeklyReport() {
           <div class="card p-3"><div class="text-[10px] mono uppercase tracking-[0.2em] text-ash">Hot</div><div class="serif text-3xl mt-1">${hot.length}</div><div class="text-xs text-ash">${pct(hot.length)}% of funnel</div></div>
           <div class="card p-3"><div class="text-[10px] mono uppercase tracking-[0.2em] text-ash">Warm</div><div class="serif text-3xl mt-1">${warm.length}</div><div class="text-xs text-ash">${pct(warm.length)}% — nurture</div></div>
           <div class="card p-3"><div class="text-[10px] mono uppercase tracking-[0.2em] text-ash">Vendor apps</div><div class="serif text-3xl mt-1">${vendors.length}</div><div class="text-xs text-ash">commercial track</div></div>
-          <div class="card p-3"><div class="text-[10px] mono uppercase tracking-[0.2em] text-ash">Meetings (week)</div><div class="serif text-3xl mt-1">${bookedThisWeek.length}</div><div class="text-xs text-ash">${doneThisWeek.length} done · ${upcomingThisWeek.length} upcoming</div></div>
+          <div class="card p-3"><div class="text-[10px] mono uppercase tracking-[0.2em] text-ash">Meetings (week)</div><div class="serif text-3xl mt-1">${bookedThisWeek.length}</div><div class="text-xs text-ash">${doneThisWeek.length} done · ${upcomingThisWeek.length} upcoming${missedThisWeek.length ? ` · ${missedThisWeek.length} did not happen` : ''}</div></div>
         </div>
         <div class="report-comparison-grid mt-3">
           ${reportComparisonCard('Reach-outs', shownMetrics.touchpoints, previousMetrics.touchpoints)}
@@ -9162,7 +9300,7 @@ function renderContactDrawer() {
         <div class="grid grid-cols-2 gap-3 mt-3">
           <div><div class="label">Point of contact</div><input class="input" data-field="pointOfContact" data-testid="contact-poc-input" value="${esc(c.pointOfContact||'')}" placeholder="Person's name"/></div>
           <div><div class="label">Role</div><input class="input" data-field="role" data-testid="contact-role-input" value="${esc(c.role||'')}"/></div>
-          <div><div class="label">Phone</div><div class="flex gap-1"><select class="select shrink-0" style="width:auto;padding-right:1.6rem" data-phone-cc data-testid="contact-phone-cc" aria-label="Country code">${phoneCountryOptionsHtml((parsePhone(c.phone) || {}).cc || defaultCountryCode())}</select><input class="input min-w-0" data-field="phone" data-testid="contact-phone-input" value="${esc(c.phone||'')}" placeholder="(305) 555-0100"/></div></div>
+          <div><div class="label">Phone</div><div class="flex gap-1"><select class="select shrink-0" style="width:auto;max-width:10rem;padding-right:1.6rem" data-phone-cc data-testid="contact-phone-cc" aria-label="Country code">${phoneCountryOptionsHtml((parsePhone(c.phone) || {}).cc || defaultCountryCode())}</select><input class="input min-w-0" data-field="phone" data-testid="contact-phone-input" value="${esc(c.phone||'')}" placeholder="(305) 555-0100"/></div></div>
           <div><div class="label">Email</div><input class="input" data-field="email" data-testid="contact-email-input" value="${esc(c.email||'')}"/></div>
           <div><div class="label">Company</div><input class="input" data-field="company" data-testid="contact-company-input" value="${esc(c.company||'')}"/></div>
           <div>
@@ -9234,10 +9372,36 @@ function renderContactDrawer() {
             </div>`).join('')}
         </div>
       </details></section>
+      <section data-drawer-pane="lead" class="px-7 py-3 border-b border-sand"><details class="drawer-section" data-drawer-section="addresses" ${ui.drawerAddressesOpen ? 'open' : ''} data-testid="drawer-addresses">
+        <summary>Addresses <small>${(c.addresses || []).length ? `${(c.addresses || []).length} added` : 'none added'}</small></summary>
+        <div class="flex items-center justify-between gap-3 mt-2">
+          <div class="text-xs text-ash">Office, showroom, delivery or installation site — as many as the lead needs.</div>
+          <button class="btn btn-ghost" data-action="add-address" data-testid="btn-add-address">${svgIcon('plus')} Add address</button>
+        </div>
+        <div class="mt-4 divide-row">
+          ${(c.addresses || []).length === 0 ? `<div class="text-sm text-ash py-4">No addresses added for this lead.</div>` : (c.addresses || []).map(a => `
+            <div class="py-4 flex items-start gap-3" data-testid="address-row-${a.id}">
+              <div class="w-9 h-9 rounded-full bg-sand flex items-center justify-center shrink-0">${svgIcon('map')}</div>
+              <div class="flex-1 min-w-0">
+                <div class="font-semibold text-sm">${esc(a.label || 'Address')}</div>
+                <div class="text-sm mt-1 leading-relaxed">${esc(a.street || '')}${a.street ? '<br/>' : ''}${esc([a.city, a.state].filter(Boolean).join(', '))}${a.zip ? ` ${esc(a.zip)}` : ''}${a.country ? `<br/>${esc(a.country)}` : ''}</div>
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs">
+                  ${addressMapUrl(a) ? `<a class="text-ember hover:underline" href="${esc(addressMapUrl(a))}" target="_blank" rel="noopener noreferrer">Open in Maps</a>` : ''}
+                  ${addressOneLine(a) ? `<button type="button" class="hover:underline text-ash" data-action="copy-address" data-id="${a.id}">Copy</button>` : ''}
+                </div>
+                ${a.notes ? `<div class="text-xs mt-2 leading-relaxed text-ash">${esc(a.notes)}</div>` : ''}
+              </div>
+              <div class="flex items-center gap-1 shrink-0">
+                <button class="btn btn-ghost" data-action="edit-address" data-id="${a.id}" data-testid="btn-edit-address-${a.id}" title="Edit address">${svgIcon('pencil')}</button>
+                <button class="btn btn-danger" data-action="delete-address" data-id="${a.id}" data-testid="btn-delete-address-${a.id}" title="Delete address">${svgIcon('trash')}</button>
+              </div>
+            </div>`).join('')}
+        </div>
+      </details></section>
       <section data-drawer-pane="lead" class="px-7 py-5 border-b border-sand">
         <div class="flex items-center justify-between gap-3">
           <h3 class="serif text-2xl">Meetings</h3>
-          <span class="text-xs text-ash">${meetings.length ? `${meetings.filter(m => !m.completed).length} upcoming` : 'none yet'}</span>
+          <span class="text-xs text-ash">${meetings.length ? `${meetings.filter(meetingUpcoming).length} upcoming${meetings.some(meetingMissed) ? ` · ${meetings.filter(meetingMissed).length} did not happen` : ''}` : 'none yet'}</span>
         </div>
         <div class="meeting-form">
           <input id="new-meeting-when" type="datetime-local" class="input" data-testid="new-meeting-when" aria-label="Scheduled on"/>
@@ -9273,10 +9437,11 @@ function renderContactDrawer() {
                       </div>
                       <div class="col-span-2">
                         <div class="label">Status</div>
-                        <label class="inline-flex items-center gap-2 mt-2">
-                          <input type="checkbox" data-meeting-edit-field="completed" data-id="${m.id}" ${m.completed?'checked':''}/>
-                          <span class="text-sm">Completed</span>
-                        </label>
+                        <select class="input" data-meeting-edit-field="outcome" data-id="${m.id}">
+                          <option value="" ${meetingOutcome(m) === '' ? 'selected' : ''}>Scheduled</option>
+                          <option value="completed" ${meetingOutcome(m) === 'completed' ? 'selected' : ''}>Completed</option>
+                          <option value="missed" ${meetingOutcome(m) === 'missed' ? 'selected' : ''}>Did not happen</option>
+                        </select>
                       </div>
                       <div class="col-span-12">
                         <div class="label">Agenda</div>
@@ -9294,14 +9459,14 @@ function renderContactDrawer() {
                 <div class="min-w-0">
                   <div class="text-sm font-semibold flex items-center gap-2 flex-wrap">${esc(m.agenda || 'Meeting')}${meetingTypeChip(m)}</div>
                   <div class="text-xs text-ash mono">
-                    Scheduled on ${fmtDateTime(m.scheduledOn)}${m.createdAt ? ` · booked ${fmtDate(m.createdAt)}` : ''}
+                    Scheduled on ${fmtDateTime(m.scheduledOn)}${m.createdAt ? ` · booked ${fmtDate(m.createdAt)}` : ''}${meetingReschedules(m).length ? ` · rescheduled ${meetingReschedules(m).length}× <span title="${esc(meetingReschedules(m).map(r => `${fmtDateTime(r.from)} → ${fmtDateTime(r.to)}${r.reason ? ` (${MEETING_MISS_REASONS[r.reason] || r.reason})` : ''}`).join('\n'))}">(was ${esc(fmtDateTime(meetingReschedules(m)[meetingReschedules(m).length - 1].from))})</span>` : ''}
                   </div>
+                  ${meetingMissed(m) ? `<div class="text-xs mt-1"><span class="chip chip-inactive" data-testid="meeting-missed-${m.id}">Did not happen</span> <span class="text-ash">${esc(meetingMissLabel(m))}</span></div>` : (meetingOutcome(m) === 'completed' ? `<div class="text-xs mt-1"><span class="chip chip-paid" data-testid="meeting-done-${m.id}">Completed</span></div>` : '')}
                 </div>
-                <div class="flex items-center gap-2 shrink-0">
-                  <label class="text-xs inline-flex items-center gap-1">
-                    <input type="checkbox" data-action="toggle-meeting" data-id="${m.id}" ${m.completed?'checked':''} data-testid="meeting-complete-${m.id}"/>
-                    Completed
-                  </label>
+                <div class="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+                  ${meetingOutcome(m) === '' ? `<button class="btn btn-ghost" data-action="meeting-happened" data-id="${m.id}" data-testid="meeting-complete-${m.id}" title="The meeting took place">Happened</button><button class="btn btn-ghost" data-action="meeting-missed" data-id="${m.id}" data-testid="meeting-missed-btn-${m.id}" title="No-show, no Zoom, cancelled…">Didn’t happen</button>` : ''}
+                  ${meetingMissed(m) ? `<button class="btn btn-primary" data-action="meeting-reschedule" data-id="${m.id}" data-testid="meeting-reschedule-${m.id}" title="Same meeting, new date — counts once">Reschedule</button>` : ''}
+                  ${meetingOutcome(m) !== '' ? `<button class="btn btn-ghost" data-action="meeting-reset" data-id="${m.id}" data-testid="meeting-reset-${m.id}" title="Back to scheduled">Undo</button>` : ''}
                   <button class="btn btn-ghost" data-action="edit-meeting" data-id="${m.id}" data-testid="btn-edit-meeting-${m.id}" title="Edit">${svgIcon('pencil')}</button>
                   <button class="btn btn-danger" data-action="delete-meeting" data-id="${m.id}">${svgIcon('trash')}</button>
                 </div>
@@ -9821,7 +9986,7 @@ function bindPageHandlers() {
   // Workspace appearance and optional modules
   document.querySelectorAll('[data-workspace-cc]').forEach(el => el.addEventListener('change', () => {
     state.workspaceSettings.defaultCountryCode = String(el.value || '1');
-    saveState(); renderAll(); toast(`Phone numbers without a code are now read as +${state.workspaceSettings.defaultCountryCode}.`);
+    saveState(); renderAll(); toast(`Phone numbers without a code are now read as ${phoneDialLabel(state.workspaceSettings.defaultCountryCode)} (${(phoneCountryFor(state.workspaceSettings.defaultCountryCode) || {}).name || 'unknown'}).`);
   }));
   document.querySelectorAll('[data-workspace-field]').forEach(el => {
     const saveWorkspaceField = () => {
@@ -10663,7 +10828,7 @@ function bindDrawerHandlers() {
   document.querySelectorAll('[data-quick-when-toggle]').forEach(el => el.addEventListener('click', () => { ui.quickLogWhenOpen = !ui.quickLogWhenOpen; if (!ui.quickLogWhenOpen) { ui.quickLogWhen = ''; ui.quickLogDuration = ''; } renderContactDrawer(); }));
   document.querySelectorAll('[data-quick-when]').forEach(el => el.addEventListener('change', () => { ui.quickLogWhen = el.value; }));
   document.querySelectorAll('[data-quick-duration]').forEach(el => el.addEventListener('input', () => { ui.quickLogDuration = el.value; }));
-  document.querySelectorAll('details[data-drawer-section]').forEach(el => el.addEventListener('toggle', () => { if (el.getAttribute('data-drawer-section') === 'details') ui.drawerDetailsOpen = el.open; if (el.getAttribute('data-drawer-section') === 'people') ui.drawerPeopleOpen = el.open; }));
+  document.querySelectorAll('details[data-drawer-section]').forEach(el => el.addEventListener('toggle', () => { if (el.getAttribute('data-drawer-section') === 'details') ui.drawerDetailsOpen = el.open; if (el.getAttribute('data-drawer-section') === 'people') ui.drawerPeopleOpen = el.open; if (el.getAttribute('data-drawer-section') === 'addresses') ui.drawerAddressesOpen = el.open; }));
   document.querySelectorAll('[data-pick-project-card]').forEach(el => el.addEventListener('focusin', () => { const id = el.getAttribute('data-pick-project-card'); if (ui.drawerProjectId !== id) { ui.drawerProjectId = id; const head = document.querySelector('#drawer-root .drawer-head'); if (head) { /* keep typing: refresh the header only */ const tmp = document.createElement('div'); tmp.innerHTML = drawerHeadHtml(c, ''); head.replaceWith(tmp.firstElementChild); bindDrawerHeadHandlersOnly(c); } } }));
   document.querySelectorAll('[data-action="quick-log"]').forEach(el => el.addEventListener('click', () => {
     const channel = ui.quickLogChannel || 'call';
@@ -10897,6 +11062,60 @@ function bindDrawerHandlers() {
     });
   });
 
+  // Addresses
+  const openAddressEditor = (existing) => {
+    const labelOptions = [...ADDRESS_LABELS, ...(existing?.label && !ADDRESS_LABELS.includes(existing.label) ? [existing.label] : [])];
+    openModal({
+      title: existing ? 'Edit address' : 'Add address',
+      subtitle: 'Kept with the lead, next to the people at the company.',
+      fields: [
+        { key:'label', label:'What is this address', type:'select', value: existing?.label || 'Office', options: labelOptions.map(l => ({ value:l, label:l })) },
+        { key:'street', label:'Street', type:'text', value: existing?.street || '', placeholder:'Street and number, suite / floor' },
+        { key:'city', label:'City', type:'text', value: existing?.city || '', placeholder:'City' },
+        { key:'state', label:'State / region', type:'text', value: existing?.state || '', placeholder:'e.g. FL' },
+        { key:'zip', label:'ZIP / postal code', type:'text', value: existing?.zip || '', placeholder:'ZIP' },
+        { key:'country', label:'Country', type:'text', value: existing?.country || '', placeholder:'Leave empty for USA' },
+        { key:'notes', label:'Notes', type:'textarea', rows:2, value: existing?.notes || '', placeholder:'Access, parking, delivery hours, who to ask for…' },
+      ],
+      submitLabel: existing ? 'Save address' : 'Add address',
+      onSubmit: values => {
+        const record = { id: existing?.id || cryptoId(), label: String(values.label || '').trim(), street: String(values.street || '').trim(), city: String(values.city || '').trim(), state: String(values.state || '').trim(), zip: String(values.zip || '').trim(), country: String(values.country || '').trim(), notes: String(values.notes || '').trim() };
+        if (!addressOneLine(record)) { toast('Enter at least the street or the city.'); return false; }
+        c.addresses = Array.isArray(c.addresses) ? c.addresses : [];
+        if (existing) { const i = c.addresses.findIndex(item => item.id === existing.id); if (i >= 0) c.addresses[i] = record; else c.addresses.push(record); }
+        else c.addresses.push(record);
+        ui.drawerAddressesOpen = true;
+        saveState();
+        if (ui.page === 'contacts') renderPage();
+        renderContactDrawer();
+        toast(existing ? 'Address updated.' : 'Address added.');
+      },
+    });
+  };
+  const addAddress = document.querySelector('[data-action="add-address"]');
+  if (addAddress) addAddress.addEventListener('click', () => openAddressEditor(null));
+  document.querySelectorAll('[data-action="edit-address"]').forEach(el => el.addEventListener('click', () => {
+    const a = (c.addresses || []).find(item => item.id === el.getAttribute('data-id'));
+    if (a) openAddressEditor(a);
+  }));
+  document.querySelectorAll('[data-action="copy-address"]').forEach(el => el.addEventListener('click', async () => {
+    const a = (c.addresses || []).find(item => item.id === el.getAttribute('data-id'));
+    if (!a) return;
+    try { await navigator.clipboard.writeText(addressOneLine(a)); toast('Address copied.'); } catch (e) { toast(addressOneLine(a)); }
+  }));
+  document.querySelectorAll('[data-action="delete-address"]').forEach(el => {
+    el.addEventListener('click', () => {
+      const a = (c.addresses || []).find(item => item.id === el.getAttribute('data-id'));
+      if (!a || !confirm(`Delete the ${a.label || ''} address ${addressOneLine(a)}?`)) return;
+      recordDeletion(a.id);
+      c.addresses = (c.addresses || []).filter(item => item.id !== a.id);
+      saveState();
+      if (ui.page === 'contacts') renderPage();
+      renderContactDrawer();
+      toast('Address removed.');
+    });
+  });
+
   // Add meeting
   const btnAdd = document.querySelector('[data-action="add-meeting"]');
   if (btnAdd) btnAdd.addEventListener('click', () => {
@@ -10912,13 +11131,55 @@ function bindDrawerHandlers() {
     saveStateNow(); renderContactDrawer();
   });
 
-  // Toggle / delete meetings
-  document.querySelectorAll('[data-action="toggle-meeting"]').forEach(el => {
-    el.addEventListener('change', () => {
-      const m = (c.meetings||[]).find(x => x.id === el.getAttribute('data-id'));
-      if (m) { m.completed = el.checked; saveState(); renderContactDrawer(); }
+  // Outcome / reschedule / delete meetings
+  const meetingById = (el) => (c.meetings || []).find(x => x.id === el.getAttribute('data-id'));
+  document.querySelectorAll('[data-action="meeting-happened"]').forEach(el => el.addEventListener('click', () => {
+    const m = meetingById(el); if (!m) return;
+    setMeetingOutcome(m, 'completed'); saveState(); renderContactDrawer(); toast('Meeting marked as completed.');
+  }));
+  document.querySelectorAll('[data-action="meeting-reset"]').forEach(el => el.addEventListener('click', () => {
+    const m = meetingById(el); if (!m) return;
+    setMeetingOutcome(m, ''); saveState(); renderContactDrawer();
+  }));
+  document.querySelectorAll('[data-action="meeting-missed"]').forEach(el => el.addEventListener('click', () => {
+    const m = meetingById(el); if (!m) return;
+    openModal({
+      title: 'The meeting did not happen',
+      subtitle: 'Say why, and reschedule it right away if you already have a new time. Rescheduling keeps it as the same meeting — it counts once for pay. To book a separate new meeting, use Schedule above.',
+      fields: [
+        { key:'reason', label:'What happened', type:'select', value:'no_show', options: Object.entries(MEETING_MISS_REASONS).map(([value, label]) => ({ value, label })) },
+        { key:'note', label:'Note (optional)', type:'text', placeholder:'e.g. client stuck in traffic, Zoom link failed' },
+        { key:'when', label:'Rescheduled to (optional)', type:'datetime-local', value:'', help:'Leave empty to decide later — you can reschedule from the meeting row at any time.' },
+      ],
+      submitLabel: 'Save',
+      onSubmit: (v) => {
+        setMeetingOutcome(m, 'missed', { reason: v.reason, note: v.note });
+        let msg = 'Meeting marked as not happened.';
+        if (v.when) { const d = parseLocalInput(v.when); if (isNaN(d)) { toast('Check the new date and time.'); return false; } rescheduleMeeting(m, d.toISOString(), v.note); msg = `Meeting rescheduled to ${fmtDateTime(m.scheduledOn)} — still counts as one meeting.`; }
+        saveState(); renderContactDrawer(); if (['dashboard', 'calendar', 'reports'].includes(ui.page)) renderPage();
+        toast(msg);
+      },
     });
-  });
+  }));
+  document.querySelectorAll('[data-action="meeting-reschedule"]').forEach(el => el.addEventListener('click', () => {
+    const m = meetingById(el); if (!m) return;
+    openModal({
+      title: 'Reschedule this meeting',
+      subtitle: `Same meeting, new date${m.scheduledOn ? ` (was ${fmtDateTime(m.scheduledOn)})` : ''}. It stays one meeting — booked once, paid once. A separate new meeting is scheduled from the form above.`,
+      fields: [
+        { key:'when', label:'New date & time', type:'datetime-local', value:'' },
+        { key:'note', label:'Note (optional)', type:'text', value: m.missNote || '', placeholder:'e.g. client asked for the following week' },
+      ],
+      submitLabel: 'Reschedule',
+      onSubmit: (v) => {
+        if (!v.when) { toast('Pick the new date and time.'); return false; }
+        const d = parseLocalInput(v.when); if (isNaN(d)) { toast('Check the new date and time.'); return false; }
+        rescheduleMeeting(m, d.toISOString(), v.note);
+        saveState(); renderContactDrawer(); if (['dashboard', 'calendar', 'reports'].includes(ui.page)) renderPage();
+        toast(`Meeting rescheduled to ${fmtDateTime(m.scheduledOn)} — still counts as one meeting.`);
+      },
+    });
+  }));
   document.querySelectorAll('[data-action="delete-meeting"]').forEach(el => {
     el.addEventListener('click', () => { if (!confirm('Delete this meeting?')) return; recordDeletion(el.getAttribute('data-id')); c.meetings = (c.meetings||[]).filter(x => x.id !== el.getAttribute('data-id')); saveState(); renderContactDrawer(); });
   });
@@ -10936,8 +11197,8 @@ function bindDrawerHandlers() {
       if (!m) return;
       document.querySelectorAll(`[data-meeting-edit-field][data-id="${id}"]`).forEach(inp => {
         const key = inp.getAttribute('data-meeting-edit-field');
-        if (key === 'completed') {
-          m.completed = inp.checked;
+        if (key === 'outcome') {
+          if (inp.value !== meetingOutcome(m)) setMeetingOutcome(m, inp.value, inp.value === 'missed' ? { reason: m.missReason || 'other', note: m.missNote || '' } : null);
         } else if (key === 'scheduledOn' || key === 'createdAt') {
           m[key] = inp.value ? parseLocalInput(inp.value).toISOString() : '';
         } else {
@@ -11589,7 +11850,7 @@ function isBlankContact(c) {
   if (!c || (c.name !== 'New contact' && c.name !== 'New project')) return false;
   const emptyText = ['pointOfContact','email','phone','company','role','website','statusReason','nextStep','notes','campaignName']
     .every(key => !String(c[key] || '').trim());
-  const emptyArrays = ['tags','subcontacts','meetings','calls','renders','renderRequests','orders','sales','projectLabels','projects']
+  const emptyArrays = ['tags','subcontacts','addresses','meetings','calls','renders','renderRequests','orders','sales','projectLabels','projects']
     .every(key => !(c[key] && c[key].length));
   const untouchedDefaults = (c.status || 'Warm') === 'Warm' && (c.leadSource || 'Regular') === 'Regular'
     && !c.nextActionDue && !c.onHoldUntil && !c.category;
@@ -12120,6 +12381,7 @@ function downloadWorkbook(filename, sheets) {
 function exportContactsXlsx() {
   const contacts = [];
   const subcontacts = [];
+  const addresses = [];
   const communications = [];
   const meetings = [];
   const sales = [];
@@ -12156,10 +12418,22 @@ function exportContactsXlsx() {
       'Created at': c.createdAt || '',
       Meetings: (c.meetings || []).length,
       'Additional company contacts': (c.subcontacts || []).length,
+      Addresses: (c.addresses || []).map(a => `${a.label ? `${a.label}: ` : ''}${addressOneLine(a)}`).join(' | '),
       'Communication logs': (c.calls || []).length,
       Estimates: estimateSetCount(c.sales || []),
       'Sold estimates': (c.sales || []).filter(s => saleIsSold(s)).length,
       'Sold value (USD)': (c.sales || []).filter(s => saleIsSold(s)).reduce((total, s) => total + Number(s.amount || 0), 0),
+    });
+    for (const a of (c.addresses || [])) addresses.push({
+      ...contactBase,
+      'Address ID': a.id || '',
+      Label: a.label || '',
+      Street: a.street || '',
+      City: a.city || '',
+      'State / region': a.state || '',
+      'ZIP / postal code': a.zip || '',
+      Country: a.country || '',
+      Notes: a.notes || '',
     });
     for (const person of (c.subcontacts || [])) subcontacts.push({
       ...contactBase,
@@ -12189,6 +12463,8 @@ function exportContactsXlsx() {
       'Booked on': meeting.createdAt || '',
       Agenda: meeting.agenda || '',
       Completed: meeting.completed ? 'Yes' : 'No',
+      Outcome: meetingOutcomeLabel(meeting),
+      'Rescheduled times': meetingReschedules(meeting).length,
     });
     for (const sale of (c.sales || [])) sales.push({
       ...contactBase,
@@ -12225,6 +12501,7 @@ function exportContactsXlsx() {
   downloadWorkbook(`lumexa-contacts-${exportStamp()}.xlsx`, [
     { name:'Contacts', rows:contacts },
     { name:'Company contacts', rows:subcontacts },
+    { name:'Addresses', rows:addresses },
     { name:'Communications', rows:communications },
     { name:'Meetings', rows:meetings },
     { name:'Estimates & sales', rows:sales },
@@ -12273,7 +12550,7 @@ function campaignSalesEvidence(contact) {
 }
 function campaignMeetingEvidence(contact) {
   return (contact.meetings || []).map(meeting =>
-    `${fmtDateTime(meeting.scheduledOn || meeting.createdAt)} — ${meeting.completed ? 'Completed' : 'Scheduled'}${meeting.agenda ? ` · ${meeting.agenda}` : ''}`
+    `${fmtDateTime(meeting.scheduledOn || meeting.createdAt)} — ${meetingOutcomeLabel(meeting)}${meeting.agenda ? ` · ${meeting.agenda}` : ''}`
   ).join('\n');
 }
 function campaignContactMoment(contact) {
@@ -12434,6 +12711,8 @@ function exportCampaignStatisticsXlsx() {
       'Booked on': meeting.createdAt || '',
       Agenda: meeting.agenda || '',
       Completed: meeting.completed ? 'Yes' : 'No',
+      Outcome: meetingOutcomeLabel(meeting),
+      'Rescheduled times': meetingReschedules(meeting).length,
     }));
     (c.statusHistory || []).forEach(entry => statusHistory.push({
       'Campaign name': campaignName,
@@ -12647,6 +12926,7 @@ function svgIcon(name) {
     case 'star':  return wrap(`<path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9L12 16.9l-5.3 2.8 1.1-5.9-4.3-4.1 5.9-.8z"/>`);
     case 'grid':  return wrap(`<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>`);
     case 'folder': return wrap(`<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>`);
+    case 'map': return wrap(`<path d="M12 21s-6-5.3-6-10a6 6 0 0 1 12 0c0 4.7-6 10-6 10z"/><circle cx="12" cy="11" r="2.2"/>`);
     case 'columns': return wrap(`<rect x="3" y="4" width="5" height="16" rx="1"/><rect x="10" y="4" width="5" height="16" rx="1"/><rect x="17" y="4" width="4" height="16" rx="1"/>`);
     case 'calendar': return wrap(`<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/><path d="M8 14h2M14 14h2M8 18h2M14 18h2"/>`);
     case 'shield': return wrap(`<path d="M12 3l8 3v5c0 5-3.3 8.4-8 10-4.7-1.6-8-5-8-10V6l8-3z"/><path d="M9 12l2 2 4-4"/>`);

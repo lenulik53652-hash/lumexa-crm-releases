@@ -1,7 +1,7 @@
 {
-  "build": "2026-11-17.11",
-  "file": "builds/page-2026-11-17.11.html",
-  "sha256": "1f18bad198db876538a387ed1ddce0759ec13c2c6aaee3bc99368c52c8dd235c",
+  "build": "2026-11-18.1",
+  "file": "builds/page-2026-11-18.1.html",
+  "sha256": "04bf437280fe82fb7c0524211e6064b651c372bbfdb45e69b82cc0111ca0a780",
   "minShell": "1.1.9",
-  "publishedAt": "2026-11-17T19:47:19.824Z"
+  "publishedAt": "2026-11-18T20:14:27.105Z"
 }

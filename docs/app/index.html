@@ -1353,7 +1353,7 @@
 
 const STORAGE_KEY = 'lumexa_crm_state_v2';
 const CLOUD_BASE_STORAGE_KEY = 'lumexa_crm_cloud_base_v1';
-const CRM_BUILD_BADGE = 'build 2026-11-17.11';
+const CRM_BUILD_BADGE = 'build 2026-11-18.1';
 /* ----------------- time zone -----------------
    Every day, week and month boundary and every displayed time follows the workspace time zone
    (Settings → Workspace), Miami by default, so the whole team sees one calendar wherever a
@@ -1537,25 +1537,99 @@ function cryptoId() { return 'x' + Math.random().toString(36).slice(2, 10) + Dat
 // "+1 305 555 0100" and "1-305-555-0100" are the same number. Numbers typed without a country code
 // are read as the workspace's default country (Settings → Identity); any number may carry its own
 // code with a leading "+" (or "00"). Stored numbers are written back in one consistent format.
+// Every ITU calling code. Countries that share one code are one entry (United States / Canada,
+// Russia / Kazakhstan, …). North American Numbering Plan territories (Bahamas, Jamaica, Puerto Rico, …)
+// share "+1" with an area code of their own, so they carry a four-digit code like "1242"; `codes`
+// lists the extra area codes a country has (Dominican Republic 809 / 829 / 849).
+const PHONE_FAVOURITE_CODES = ['1', '44', '420', '421', '49'];
 const PHONE_COUNTRIES = [
-  { code:'1', iso:'US', name:'United States / Canada' }, { code:'44', iso:'GB', name:'United Kingdom' },
-  { code:'420', iso:'CZ', name:'Czech Republic' }, { code:'421', iso:'SK', name:'Slovakia' },
-  { code:'49', iso:'DE', name:'Germany' }, { code:'43', iso:'AT', name:'Austria' }, { code:'41', iso:'CH', name:'Switzerland' },
-  { code:'33', iso:'FR', name:'France' }, { code:'34', iso:'ES', name:'Spain' }, { code:'39', iso:'IT', name:'Italy' },
-  { code:'31', iso:'NL', name:'Netherlands' }, { code:'32', iso:'BE', name:'Belgium' }, { code:'352', iso:'LU', name:'Luxembourg' },
-  { code:'48', iso:'PL', name:'Poland' }, { code:'36', iso:'HU', name:'Hungary' }, { code:'40', iso:'RO', name:'Romania' },
-  { code:'351', iso:'PT', name:'Portugal' }, { code:'353', iso:'IE', name:'Ireland' },
-  { code:'45', iso:'DK', name:'Denmark' }, { code:'46', iso:'SE', name:'Sweden' }, { code:'47', iso:'NO', name:'Norway' }, { code:'358', iso:'FI', name:'Finland' },
-  { code:'30', iso:'GR', name:'Greece' }, { code:'90', iso:'TR', name:'Turkey' }, { code:'972', iso:'IL', name:'Israel' },
-  { code:'971', iso:'AE', name:'United Arab Emirates' }, { code:'966', iso:'SA', name:'Saudi Arabia' }, { code:'974', iso:'QA', name:'Qatar' },
-  { code:'52', iso:'MX', name:'Mexico' }, { code:'55', iso:'BR', name:'Brazil' }, { code:'54', iso:'AR', name:'Argentina' },
-  { code:'57', iso:'CO', name:'Colombia' }, { code:'56', iso:'CL', name:'Chile' }, { code:'51', iso:'PE', name:'Peru' },
-  { code:'61', iso:'AU', name:'Australia' }, { code:'64', iso:'NZ', name:'New Zealand' },
-  { code:'81', iso:'JP', name:'Japan' }, { code:'82', iso:'KR', name:'South Korea' }, { code:'86', iso:'CN', name:'China' },
-  { code:'91', iso:'IN', name:'India' }, { code:'65', iso:'SG', name:'Singapore' }, { code:'852', iso:'HK', name:'Hong Kong' },
-  { code:'27', iso:'ZA', name:'South Africa' }, { code:'7', iso:'RU', name:'Russia / Kazakhstan' },
+  { code:'93', iso:'AF', name:'Afghanistan' }, { code:'355', iso:'AL', name:'Albania' }, { code:'213', iso:'DZ', name:'Algeria' },
+  { code:'1684', iso:'AS', name:'American Samoa' }, { code:'376', iso:'AD', name:'Andorra' }, { code:'244', iso:'AO', name:'Angola' },
+  { code:'1264', iso:'AI', name:'Anguilla' }, { code:'1268', iso:'AG', name:'Antigua and Barbuda' }, { code:'54', iso:'AR', name:'Argentina' },
+  { code:'374', iso:'AM', name:'Armenia' }, { code:'297', iso:'AW', name:'Aruba' }, { code:'247', iso:'AC', name:'Ascension Island' },
+  { code:'61', iso:'AU', name:'Australia (incl. Christmas and Cocos Islands)' }, { code:'43', iso:'AT', name:'Austria' }, { code:'994', iso:'AZ', name:'Azerbaijan' },
+  { code:'1242', iso:'BS', name:'Bahamas' }, { code:'973', iso:'BH', name:'Bahrain' }, { code:'880', iso:'BD', name:'Bangladesh' },
+  { code:'1246', iso:'BB', name:'Barbados' }, { code:'375', iso:'BY', name:'Belarus' }, { code:'32', iso:'BE', name:'Belgium' },
+  { code:'501', iso:'BZ', name:'Belize' }, { code:'229', iso:'BJ', name:'Benin' }, { code:'1441', iso:'BM', name:'Bermuda' },
+  { code:'975', iso:'BT', name:'Bhutan' }, { code:'591', iso:'BO', name:'Bolivia' }, { code:'387', iso:'BA', name:'Bosnia and Herzegovina' },
+  { code:'267', iso:'BW', name:'Botswana' }, { code:'55', iso:'BR', name:'Brazil' }, { code:'246', iso:'IO', name:'British Indian Ocean Territory (Diego Garcia)' },
+  { code:'1284', iso:'VG', name:'British Virgin Islands' }, { code:'673', iso:'BN', name:'Brunei' }, { code:'359', iso:'BG', name:'Bulgaria' },
+  { code:'226', iso:'BF', name:'Burkina Faso' }, { code:'257', iso:'BI', name:'Burundi' }, { code:'855', iso:'KH', name:'Cambodia' },
+  { code:'237', iso:'CM', name:'Cameroon' }, { code:'238', iso:'CV', name:'Cape Verde' }, { code:'1345', iso:'KY', name:'Cayman Islands' },
+  { code:'236', iso:'CF', name:'Central African Republic' }, { code:'235', iso:'TD', name:'Chad' }, { code:'56', iso:'CL', name:'Chile' },
+  { code:'86', iso:'CN', name:'China' }, { code:'57', iso:'CO', name:'Colombia' }, { code:'269', iso:'KM', name:'Comoros' },
+  { code:'242', iso:'CG', name:'Congo (Brazzaville)' }, { code:'243', iso:'CD', name:'Congo, Democratic Republic (Kinshasa)' }, { code:'682', iso:'CK', name:'Cook Islands' },
+  { code:'506', iso:'CR', name:'Costa Rica' }, { code:'225', iso:'CI', name:'Côte d’Ivoire' }, { code:'385', iso:'HR', name:'Croatia' },
+  { code:'53', iso:'CU', name:'Cuba' }, { code:'599', iso:'CW', name:'Curaçao / Caribbean Netherlands' }, { code:'357', iso:'CY', name:'Cyprus' },
+  { code:'420', iso:'CZ', name:'Czech Republic' }, { code:'45', iso:'DK', name:'Denmark' }, { code:'253', iso:'DJ', name:'Djibouti' },
+  { code:'1767', iso:'DM', name:'Dominica' }, { code:'1809', codes:['1829', '1849'], iso:'DO', name:'Dominican Republic' }, { code:'593', iso:'EC', name:'Ecuador' },
+  { code:'20', iso:'EG', name:'Egypt' }, { code:'503', iso:'SV', name:'El Salvador' }, { code:'240', iso:'GQ', name:'Equatorial Guinea' },
+  { code:'291', iso:'ER', name:'Eritrea' }, { code:'372', iso:'EE', name:'Estonia' }, { code:'268', iso:'SZ', name:'Eswatini (Swaziland)' },
+  { code:'251', iso:'ET', name:'Ethiopia' }, { code:'500', iso:'FK', name:'Falkland Islands / South Georgia' }, { code:'298', iso:'FO', name:'Faroe Islands' },
+  { code:'679', iso:'FJ', name:'Fiji' }, { code:'358', iso:'FI', name:'Finland / Åland Islands' }, { code:'33', iso:'FR', name:'France' },
+  { code:'594', iso:'GF', name:'French Guiana' }, { code:'689', iso:'PF', name:'French Polynesia' }, { code:'241', iso:'GA', name:'Gabon' },
+  { code:'220', iso:'GM', name:'Gambia' }, { code:'995', iso:'GE', name:'Georgia' }, { code:'49', iso:'DE', name:'Germany' },
+  { code:'233', iso:'GH', name:'Ghana' }, { code:'350', iso:'GI', name:'Gibraltar' }, { code:'30', iso:'GR', name:'Greece' },
+  { code:'299', iso:'GL', name:'Greenland' }, { code:'1473', iso:'GD', name:'Grenada' }, { code:'590', iso:'GP', name:'Guadeloupe / Saint Barthélemy / Saint Martin' },
+  { code:'1671', iso:'GU', name:'Guam' }, { code:'502', iso:'GT', name:'Guatemala' }, { code:'224', iso:'GN', name:'Guinea' },
+  { code:'245', iso:'GW', name:'Guinea-Bissau' }, { code:'592', iso:'GY', name:'Guyana' }, { code:'509', iso:'HT', name:'Haiti' },
+  { code:'504', iso:'HN', name:'Honduras' }, { code:'852', iso:'HK', name:'Hong Kong' }, { code:'36', iso:'HU', name:'Hungary' },
+  { code:'354', iso:'IS', name:'Iceland' }, { code:'91', iso:'IN', name:'India' }, { code:'62', iso:'ID', name:'Indonesia' },
+  { code:'98', iso:'IR', name:'Iran' }, { code:'964', iso:'IQ', name:'Iraq' }, { code:'353', iso:'IE', name:'Ireland' },
+  { code:'972', iso:'IL', name:'Israel' }, { code:'39', iso:'IT', name:'Italy / Vatican City' }, { code:'1876', codes:['1658'], iso:'JM', name:'Jamaica' },
+  { code:'81', iso:'JP', name:'Japan' }, { code:'962', iso:'JO', name:'Jordan' }, { code:'254', iso:'KE', name:'Kenya' },
+  { code:'686', iso:'KI', name:'Kiribati' }, { code:'383', iso:'XK', name:'Kosovo' }, { code:'965', iso:'KW', name:'Kuwait' },
+  { code:'996', iso:'KG', name:'Kyrgyzstan' }, { code:'856', iso:'LA', name:'Laos' }, { code:'371', iso:'LV', name:'Latvia' },
+  { code:'961', iso:'LB', name:'Lebanon' }, { code:'266', iso:'LS', name:'Lesotho' }, { code:'231', iso:'LR', name:'Liberia' },
+  { code:'218', iso:'LY', name:'Libya' }, { code:'423', iso:'LI', name:'Liechtenstein' }, { code:'370', iso:'LT', name:'Lithuania' },
+  { code:'352', iso:'LU', name:'Luxembourg' }, { code:'853', iso:'MO', name:'Macau' }, { code:'261', iso:'MG', name:'Madagascar' },
+  { code:'265', iso:'MW', name:'Malawi' }, { code:'60', iso:'MY', name:'Malaysia' }, { code:'960', iso:'MV', name:'Maldives' },
+  { code:'223', iso:'ML', name:'Mali' }, { code:'356', iso:'MT', name:'Malta' }, { code:'692', iso:'MH', name:'Marshall Islands' },
+  { code:'596', iso:'MQ', name:'Martinique' }, { code:'222', iso:'MR', name:'Mauritania' }, { code:'230', iso:'MU', name:'Mauritius' },
+  { code:'52', iso:'MX', name:'Mexico' }, { code:'691', iso:'FM', name:'Micronesia' }, { code:'373', iso:'MD', name:'Moldova' },
+  { code:'377', iso:'MC', name:'Monaco' }, { code:'976', iso:'MN', name:'Mongolia' }, { code:'382', iso:'ME', name:'Montenegro' },
+  { code:'1664', iso:'MS', name:'Montserrat' }, { code:'212', iso:'MA', name:'Morocco / Western Sahara' }, { code:'258', iso:'MZ', name:'Mozambique' },
+  { code:'95', iso:'MM', name:'Myanmar' }, { code:'264', iso:'NA', name:'Namibia' }, { code:'674', iso:'NR', name:'Nauru' },
+  { code:'977', iso:'NP', name:'Nepal' }, { code:'31', iso:'NL', name:'Netherlands' }, { code:'687', iso:'NC', name:'New Caledonia' },
+  { code:'64', iso:'NZ', name:'New Zealand' }, { code:'505', iso:'NI', name:'Nicaragua' }, { code:'227', iso:'NE', name:'Niger' },
+  { code:'234', iso:'NG', name:'Nigeria' }, { code:'683', iso:'NU', name:'Niue' }, { code:'672', iso:'NF', name:'Norfolk Island' },
+  { code:'850', iso:'KP', name:'North Korea' }, { code:'389', iso:'MK', name:'North Macedonia' }, { code:'1670', iso:'MP', name:'Northern Mariana Islands' },
+  { code:'47', iso:'NO', name:'Norway / Svalbard' }, { code:'968', iso:'OM', name:'Oman' }, { code:'92', iso:'PK', name:'Pakistan' },
+  { code:'680', iso:'PW', name:'Palau' }, { code:'970', iso:'PS', name:'Palestine' }, { code:'507', iso:'PA', name:'Panama' },
+  { code:'675', iso:'PG', name:'Papua New Guinea' }, { code:'595', iso:'PY', name:'Paraguay' }, { code:'51', iso:'PE', name:'Peru' },
+  { code:'63', iso:'PH', name:'Philippines' }, { code:'48', iso:'PL', name:'Poland' }, { code:'351', iso:'PT', name:'Portugal' },
+  { code:'1787', codes:['1939'], iso:'PR', name:'Puerto Rico' }, { code:'974', iso:'QA', name:'Qatar' }, { code:'262', iso:'RE', name:'Réunion / Mayotte' },
+  { code:'40', iso:'RO', name:'Romania' }, { code:'7', iso:'RU', name:'Russia / Kazakhstan' }, { code:'250', iso:'RW', name:'Rwanda' },
+  { code:'290', iso:'SH', name:'Saint Helena / Tristan da Cunha' }, { code:'1869', iso:'KN', name:'Saint Kitts and Nevis' }, { code:'1758', iso:'LC', name:'Saint Lucia' },
+  { code:'508', iso:'PM', name:'Saint Pierre and Miquelon' }, { code:'1784', iso:'VC', name:'Saint Vincent and the Grenadines' }, { code:'685', iso:'WS', name:'Samoa' },
+  { code:'378', iso:'SM', name:'San Marino' }, { code:'239', iso:'ST', name:'São Tomé and Príncipe' }, { code:'966', iso:'SA', name:'Saudi Arabia' },
+  { code:'221', iso:'SN', name:'Senegal' }, { code:'381', iso:'RS', name:'Serbia' }, { code:'248', iso:'SC', name:'Seychelles' },
+  { code:'232', iso:'SL', name:'Sierra Leone' }, { code:'65', iso:'SG', name:'Singapore' }, { code:'1721', iso:'SX', name:'Sint Maarten' },
+  { code:'421', iso:'SK', name:'Slovakia' }, { code:'386', iso:'SI', name:'Slovenia' }, { code:'677', iso:'SB', name:'Solomon Islands' },
+  { code:'252', iso:'SO', name:'Somalia' }, { code:'27', iso:'ZA', name:'South Africa' }, { code:'82', iso:'KR', name:'South Korea' },
+  { code:'211', iso:'SS', name:'South Sudan' }, { code:'34', iso:'ES', name:'Spain' }, { code:'94', iso:'LK', name:'Sri Lanka' },
+  { code:'249', iso:'SD', name:'Sudan' }, { code:'597', iso:'SR', name:'Suriname' }, { code:'46', iso:'SE', name:'Sweden' },
+  { code:'41', iso:'CH', name:'Switzerland' }, { code:'963', iso:'SY', name:'Syria' }, { code:'886', iso:'TW', name:'Taiwan' },
+  { code:'992', iso:'TJ', name:'Tajikistan' }, { code:'255', iso:'TZ', name:'Tanzania' }, { code:'66', iso:'TH', name:'Thailand' },
+  { code:'670', iso:'TL', name:'Timor-Leste' }, { code:'228', iso:'TG', name:'Togo' }, { code:'690', iso:'TK', name:'Tokelau' },
+  { code:'676', iso:'TO', name:'Tonga' }, { code:'1868', iso:'TT', name:'Trinidad and Tobago' }, { code:'216', iso:'TN', name:'Tunisia' },
+  { code:'90', iso:'TR', name:'Turkey' }, { code:'993', iso:'TM', name:'Turkmenistan' }, { code:'1649', iso:'TC', name:'Turks and Caicos Islands' },
+  { code:'688', iso:'TV', name:'Tuvalu' }, { code:'256', iso:'UG', name:'Uganda' }, { code:'380', iso:'UA', name:'Ukraine' },
+  { code:'971', iso:'AE', name:'United Arab Emirates' }, { code:'44', iso:'GB', name:'United Kingdom (incl. Guernsey, Jersey, Isle of Man)' }, { code:'1', iso:'US', name:'United States / Canada' },
+  { code:'598', iso:'UY', name:'Uruguay' }, { code:'1340', iso:'VI', name:'U.S. Virgin Islands' }, { code:'998', iso:'UZ', name:'Uzbekistan' },
+  { code:'678', iso:'VU', name:'Vanuatu' }, { code:'58', iso:'VE', name:'Venezuela' }, { code:'84', iso:'VN', name:'Vietnam' },
+  { code:'681', iso:'WF', name:'Wallis and Futuna' }, { code:'967', iso:'YE', name:'Yemen' }, { code:'260', iso:'ZM', name:'Zambia' },
+  { code:'263', iso:'ZW', name:'Zimbabwe' },
 ];
-const PHONE_CC_BY_LENGTH = PHONE_COUNTRIES.slice().sort((a, b) => b.code.length - a.code.length);
+// Every dialable code (including the extra area codes), longest first so "+1 242" wins over "+1".
+const PHONE_CC_BY_LENGTH = PHONE_COUNTRIES.flatMap(c => [c.code, ...(c.codes || [])]).map(code => ({ code })).sort((a, b) => b.code.length - a.code.length);
+const PHONE_COUNTRY_BY_CODE = new Map(PHONE_COUNTRIES.flatMap(c => [c.code, ...(c.codes || [])].map(code => [code, c])));
+// The list entry for a dial code ('1829' → Dominican Republic), or null.
+function phoneCountryFor(cc) { return PHONE_COUNTRY_BY_CODE.get(String(cc || '')) || null; }
+// A NANP area code → its territory's four-digit code ('242' → '1242'); '' for plain US / Canada codes.
+function nanpTerritoryCode(area) { const c = '1' + String(area || ''); return c.length === 4 && PHONE_COUNTRY_BY_CODE.has(c) ? c : ''; }
+// "+1 242" for display; "+420" for everything else.
+function phoneDialLabel(code) { const c = String(code || ''); return /^1\d{3}$/.test(c) ? `+1 ${c.slice(1)}` : `+${c}`; }
 function defaultCountryCode() {
   const v = String((state && state.workspaceSettings && state.workspaceSettings.defaultCountryCode) || '1').replace(/\D/g, '');
   return v || '1';
@@ -1568,7 +1642,9 @@ function phoneParts(raw) {
 }
 // → { cc, national, ext } or null. cc is '' when the text is too short or carries an unknown code.
 function parsePhone(raw, assumeCc) {
-  const def = String(assumeCc || defaultCountryCode());
+  let def = String(assumeCc || defaultCountryCode());
+  const nanpDefault = /^1\d{3}$/.test(def) ? def : ''; // a Caribbean / Pacific "+1" territory: dial like the US
+  if (nanpDefault) def = '1';
   let text = String(raw || '').trim();
   if (!text) return null;
   let ext = '';
@@ -1581,9 +1657,12 @@ function parsePhone(raw, assumeCc) {
   else if (digits.startsWith('00') && digits.length > 10) { digits = digits.slice(2); explicit = true; }
   else if (digits.startsWith('011') && digits.length > 11 && def === '1') { digits = digits.slice(3); explicit = true; }
   const split = (d) => { const cc = PHONE_CC_BY_LENGTH.find(c => d.startsWith(c.code) && d.length > c.code.length + 5); return cc ? { cc: cc.code, national: d.slice(cc.code.length), ext } : null; };
+  // A ten-digit NANP number: a territory of its own when the area code says so, otherwise US / Canada.
+  const nanp = (d10) => { const t = nanpTerritoryCode(d10.slice(0, 3)); return t ? { cc: t, national: d10.slice(3), ext } : { cc: '1', national: d10, ext }; };
   if (explicit) return split(digits) || { cc: '', national: digits, ext };
-  if (def === '1' && digits.length === 11 && digits[0] === '1') return { cc: '1', national: digits.slice(1), ext };
-  if (def === '1' && digits.length === 10) return { cc: '1', national: digits, ext };
+  if (def === '1' && digits.length === 11 && digits[0] === '1') return nanp(digits.slice(1));
+  if (def === '1' && digits.length === 10) return nanp(digits);
+  if (nanpDefault && digits.length === 7) return { cc: nanpDefault, national: digits, ext };
   if (digits.length > 10) { const s = split(digits); if (s) return s; }
   if (def !== '1') {
     if (digits.startsWith(def) && digits.length > def.length + 6) return { cc: def, national: digits.slice(def.length), ext };
@@ -1616,11 +1695,15 @@ function formatPhone(raw, assumeCc) {
     const local = `(${p.national.slice(0, 3)}) ${p.national.slice(3, 6)}-${p.national.slice(6)}`;
     return (defaultCountryCode() === '1' ? local : `+1 ${local}`) + extra;
   }
+  if (/^1\d{3}$/.test(p.cc) && p.national.length === 7) return `+1 (${p.cc.slice(1)}) ${p.national.slice(0, 3)}-${p.national.slice(3)}${extra}`;
   return `+${p.cc} ${groupPhoneDigits(p.national)}${extra}`;
 }
 function phoneCountryOptionsHtml(selectedCc) {
-  const sel = String(selectedCc || defaultCountryCode());
-  return PHONE_COUNTRIES.map(c => `<option value="${c.code}" ${c.code === sel ? 'selected' : ''} title="${esc(c.name)}">+${c.code} ${esc(c.iso)}</option>`).join('');
+  const selected = phoneCountryFor(selectedCc || defaultCountryCode()) || phoneCountryFor('1');
+  const favourites = PHONE_FAVOURITE_CODES.map(code => phoneCountryFor(code)).filter(Boolean);
+  const rest = PHONE_COUNTRIES.filter(c => !favourites.includes(c)).slice().sort((a, b) => a.name.localeCompare(b.name));
+  const option = (c) => `<option value="${c.code}" ${c === selected ? 'selected' : ''} title="${esc(c.name)}">${phoneDialLabel(c.code)} ${esc(c.iso)} · ${esc(c.name)}</option>`;
+  return favourites.map(option).join('') + '<option disabled>──────────</option>' + rest.map(option).join('');
 }
 
 /* ----------------- duplicate leads ----------------- */
@@ -9108,7 +9191,7 @@ function renderContactDrawer() {
         <div class="grid grid-cols-2 gap-3 mt-3">
           <div><div class="label">Point of contact</div><input class="input" data-field="pointOfContact" data-testid="contact-poc-input" value="${esc(c.pointOfContact||'')}" placeholder="Person's name"/></div>
           <div><div class="label">Role</div><input class="input" data-field="role" data-testid="contact-role-input" value="${esc(c.role||'')}"/></div>
-          <div><div class="label">Phone</div><div class="flex gap-1"><select class="select shrink-0" style="width:auto;padding-right:1.6rem" data-phone-cc data-testid="contact-phone-cc" aria-label="Country code">${phoneCountryOptionsHtml((parsePhone(c.phone) || {}).cc || defaultCountryCode())}</select><input class="input min-w-0" data-field="phone" data-testid="contact-phone-input" value="${esc(c.phone||'')}" placeholder="(305) 555-0100"/></div></div>
+          <div><div class="label">Phone</div><div class="flex gap-1"><select class="select shrink-0" style="width:auto;max-width:10rem;padding-right:1.6rem" data-phone-cc data-testid="contact-phone-cc" aria-label="Country code">${phoneCountryOptionsHtml((parsePhone(c.phone) || {}).cc || defaultCountryCode())}</select><input class="input min-w-0" data-field="phone" data-testid="contact-phone-input" value="${esc(c.phone||'')}" placeholder="(305) 555-0100"/></div></div>
           <div><div class="label">Email</div><input class="input" data-field="email" data-testid="contact-email-input" value="${esc(c.email||'')}"/></div>
           <div><div class="label">Company</div><input class="input" data-field="company" data-testid="contact-company-input" value="${esc(c.company||'')}"/></div>
           <div>
@@ -9794,7 +9877,7 @@ function bindPageHandlers() {
   // Workspace appearance and optional modules
   document.querySelectorAll('[data-workspace-cc]').forEach(el => el.addEventListener('change', () => {
     state.workspaceSettings.defaultCountryCode = String(el.value || '1');
-    saveState(); renderAll(); toast(`Phone numbers without a code are now read as +${state.workspaceSettings.defaultCountryCode}.`);
+    saveState(); renderAll(); toast(`Phone numbers without a code are now read as ${phoneDialLabel(state.workspaceSettings.defaultCountryCode)} (${(phoneCountryFor(state.workspaceSettings.defaultCountryCode) || {}).name || 'unknown'}).`);
   }));
   document.querySelectorAll('[data-workspace-field]').forEach(el => {
     const saveWorkspaceField = () => {
