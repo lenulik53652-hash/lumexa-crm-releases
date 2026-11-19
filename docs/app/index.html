@@ -39,6 +39,7 @@
     calendarEvent: 'calendarEvents',
     salesActivity: 'salesActivities',
     activity: 'activity',
+    trashItem: 'trash', // deleted records waiting for a restore (see the trash in the CRM)
   };
   const REPORT_KINDS = { dailyReport: 'dailyReports', weeklyReport: 'weeklyReports', monthlyReport: 'monthlyReports' };
   const PER_USER_KINDS = { payRate: 'payRates', payPlan: 'payPlans', userPref: 'userPrefs' };
@@ -413,12 +414,27 @@
       return summary;
     }
 
+    // The estimates of a deleted lead, as this device last saw them (soft-deleted rows stay in
+    // the mirror). Restoring the lead puts them back; people who may not see a sale never hold it.
+    deletedSalesFor(contactId) {
+      const out = [];
+      for (const row of this.mirror.values()) {
+        if (row.kind !== 'sale' || !row.deleted_at || !isObject(row.data) || String(row.data.contactId) !== String(contactId)) continue;
+        const { contactId: _cid, ...sale } = row.data;
+        out.push({ ...clone(sale), id: row.id });
+      }
+      return out;
+    }
+
     // Apply rows (from pull() or push().merged) onto the live state object in place.
     // Returns the set of contact ids touched (for targeted re-rendering).
     applyToState(state, rows) {
       const touched = new Set();
       state.contacts = Array.isArray(state.contacts) ? state.contacts : [];
       state.tombstones = Array.isArray(state.tombstones) ? state.tombstones : [];
+      // A row that arrives alive again was restored (from the trash) on another device: its
+      // tombstone must go, or the next merge here would strip it and the next push re-delete it.
+      const untomb = (id) => { for (let i = state.tombstones.length - 1; i >= 0; i--) if (state.tombstones[i] && state.tombstones[i].id === id) state.tombstones.splice(i, 1); };
       const index = () => new Map(state.contacts.map((c, i) => [String(c.id), i]));
       let byId = index();
       const ensureList = (field) => { if (!Array.isArray(state[field])) state[field] = []; return state[field]; };
@@ -431,6 +447,7 @@
             if (i != null) { state.contacts.splice(i, 1); byId = index(); }
             if (!state.tombstones.some(t => t && t.id === row.id)) state.tombstones.push({ id: row.id, deletedAt: row.deleted_at });
           } else {
+            untomb(row.id);
             const existing = i != null ? state.contacts[i] : null;
             const next = { ...data, id: row.id, sales: existing ? existing.sales : [] };
             if (existing) { for (const k of Object.keys(existing)) if (!(k in next)) delete existing[k]; Object.assign(existing, next); }
@@ -450,6 +467,7 @@
             touched.add(String(contactId));
           }
           if (row.deleted_at && !state.tombstones.some(t => t && t.id === row.id)) state.tombstones.push({ id: row.id, deletedAt: row.deleted_at });
+          else if (!row.deleted_at) untomb(row.id);
         } else if (row.kind === 'settings') {
           state.settings = { ...data, payRates: (state.settings && state.settings.payRates) || {} };
         } else if (row.kind === 'payRate') {
@@ -471,8 +489,7 @@
           const list = ensureList(LIST_KINDS[row.kind]);
           const j = list.findIndex(x => x && String(x.id) === row.id);
           if (row.deleted_at) { if (j >= 0) list.splice(j, 1); if (!state.tombstones.some(t => t && t.id === row.id)) state.tombstones.push({ id: row.id, deletedAt: row.deleted_at }); }
-          else if (j >= 0) list[j] = { ...data, id: row.id };
-          else list.push({ ...data, id: row.id });
+          else { untomb(row.id); if (j >= 0) list[j] = { ...data, id: row.id }; else list.push({ ...data, id: row.id }); }
         }
       }
       return touched;
@@ -913,6 +930,13 @@
     .kbd { font-family:'JetBrains Mono', monospace; font-size:11px; padding:2px 6px; background:var(--crm-sand); border-radius:7px; color:var(--crm-ash-dark); }
     .grain { background-image: radial-gradient(rgba(11,15,20,0.05) 1px, transparent 1px); background-size: 18px 18px; }
     .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background:var(--crm-ink); color:var(--crm-paper-soft); padding:10px 16px; border-radius:10px; font-size:13px; z-index:80; box-shadow:0 10px 30px rgba(15,23,42,0.25); }
+    .toast-undo-btn { margin-left: 12px; padding: 3px 10px; border-radius: 999px; background: var(--crm-paper-soft); color: var(--crm-ink); font-weight: 600; font-size: 12px; }
+    .toast-undo-btn:hover { background: #fff; }
+    .trash-row { display:flex; align-items:center; gap:14px; padding:12px 16px; border-top:1px solid var(--crm-sand); }
+    .trash-row:first-child { border-top:0; }
+    .trash-kind { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--crm-ash); min-width:7.5rem; }
+    .trash-title { font-weight:600; }
+    .trash-meta { font-size:12px; color:var(--crm-ash); }
     .modal-bg { position:fixed; inset:0; background: rgba(11,15,20,0.5); z-index:60; backdrop-filter: blur(2px); }
     .modal-card { position:fixed; top:50%; left:50%; transform: translate(-50%,-50%); width:480px; max-width:92vw; background:var(--crm-surface); border:1px solid var(--crm-line); border-radius:var(--crm-r-lg); z-index:61; box-shadow: 0 30px 80px rgba(15,23,42,0.24); max-height:90vh; overflow-y:auto; }
     details > summary { list-style: none; cursor: pointer; }
@@ -1353,7 +1377,7 @@
 
 const STORAGE_KEY = 'lumexa_crm_state_v2';
 const CLOUD_BASE_STORAGE_KEY = 'lumexa_crm_cloud_base_v1';
-const CRM_BUILD_BADGE = 'build 2026-11-18.1';
+const CRM_BUILD_BADGE = 'build 2026-11-18.2';
 /* ----------------- time zone -----------------
    Every day, week and month boundary and every displayed time follows the workspace time zone
    (Settings → Workspace), Miami by default, so the whole team sees one calendar wherever a
@@ -1433,6 +1457,7 @@ function defaultState() {
   return {
     contacts: [],
     tombstones: [],
+    trash: [],
     tasks: [
       {
         id: cryptoId(),
@@ -2852,6 +2877,7 @@ let ui = {
   categoryFilter: 'all',
   regionFilter: 'all',
   selectedContactIds: new Set(),
+  lastTrashEntryIds: [],
   mobileNavOpen: false,
   cloudLoaded: false,      // first successful cloud fetch this session — pushes wait for it
   unsynced: false,         // local edits not yet confirmed by the cloud
@@ -2912,6 +2938,7 @@ function loadState() {
     return mergeWithDefaults(parsed);
   } catch(e) { return defaultState(); }
 }
+const TRASH_KEEP_DAYS = 30;
 function mergeWithDefaults(incoming) {
   const def = defaultState();
   const merged = { ...def, ...incoming };
@@ -3268,6 +3295,20 @@ function mergeWithDefaults(incoming) {
   // browser whose stored reference point predates the record, where plain absence can't be told
   // apart from "never heard of it". Kept 30 days (long enough for every device to sync past the
   // deletion), then dropped. Applied last so it also covers whatever the merge just combined.
+  // Trash: deleted records wait here for a restore, then leave for good after TRASH_KEEP_DAYS.
+  // (Their ids stay tombstoned, so nothing comes back by accident.)
+  const trashCutoff = new Date(Date.now() - TRASH_KEEP_DAYS * 86400000).toISOString();
+  const expiredTrash = [];
+  merged.trash = (Array.isArray(merged.trash) ? merged.trash : []).filter(entry => {
+    if (!entry || typeof entry !== 'object' || !entry.id || !entry.kind || !entry.itemId || !entry.item || typeof entry.item !== 'object') return false;
+    if (typeof entry.deletedAt === 'string' && entry.deletedAt < trashCutoff) { expiredTrash.push(entry.id); return false; }
+    return true;
+  });
+  if (expiredTrash.length) {
+    const now = new Date().toISOString();
+    merged.tombstones = Array.isArray(merged.tombstones) ? merged.tombstones : [];
+    for (const id of expiredTrash) merged.tombstones.push({ id, t: now });
+  }
   const tombstoneCutoff = new Date(Date.now() - 30 * 86400000).toISOString();
   const tombstoneMap = new Map();
   for (const item of (Array.isArray(merged.tombstones) ? merged.tombstones : [])) {
@@ -4277,6 +4318,144 @@ function recordDeletion(...ids) {
     state.tombstones.push({ id, t: now });
   }
 }
+// The opposite: these ids are wanted again (a restore from the trash). Removes both shapes of
+// tombstone — the local {id, t} and the cloud's {id, deletedAt}.
+function forgetDeletion(...ids) {
+  const wanted = new Set(ids.filter(Boolean));
+  if (!wanted.size || !Array.isArray(state.tombstones)) return;
+  state.tombstones = state.tombstones.filter(item => !(item && wanted.has(item.id)));
+}
+
+/* ----------------- trash ----------------- */
+// Nothing is deleted outright: a lead, meeting, call, estimate, render, order, contact person,
+// address, project, file link, reminder or automation goes to the trash, where it can be restored
+// for TRASH_KEEP_DAYS. Its id is tombstoned at once (so every device drops it), and a restore
+// forgets the tombstone and puts the record back where it was. A trashed lead's estimates travel
+// inside the entry only without the cloud; with it they stay as soft-deleted rows that only the
+// people allowed to see them hold, and come back with the lead.
+const TRASH_KIND_LABELS = { contact: 'Lead', meetings: 'Meeting', calls: 'Log entry', sales: 'Estimate / sale', renders: 'Render', renderRequests: 'Render request', orders: 'Production order', subcontacts: 'Contact person', addresses: 'Address', projects: 'Project', files: 'File link', calendarEvents: 'Reminder', tasks: 'Automation' };
+const CONTACT_TRASH_FIELDS = ['meetings', 'calls', 'sales', 'renders', 'renderRequests', 'orders', 'subcontacts', 'addresses', 'projects', 'files'];
+function trashClone(v) { return JSON.parse(JSON.stringify(v)); }
+function pushTrashEntry(fields) {
+  state.trash = Array.isArray(state.trash) ? state.trash : [];
+  const entry = { id: cryptoId(), deletedAt: new Date().toISOString(), byUserId: ui.currentUser?.id || '', byName: ui.currentUser?.name || '', ...fields };
+  entry.item = trashClone(entry.item);
+  state.trash.push(entry);
+  ui.lastTrashEntryIds = [entry.id];
+  return entry.id;
+}
+function trashEntries() { return (Array.isArray(state.trash) ? state.trash : []).slice().sort((a, b) => String(b.deletedAt || '').localeCompare(String(a.deletedAt || ''))); }
+function trashEntry(id) { return (Array.isArray(state.trash) ? state.trash : []).find(entry => entry && entry.id === id) || null; }
+function trashEntriesForBrand(brand) { const b = brand || activeBrand(); return trashEntries().filter(entry => !entry.brand || entry.brand === b); }
+function trashDaysLeft(entry) { const t = new Date(entry?.deletedAt || 0).getTime(); return Math.max(0, Math.ceil((t + TRASH_KEEP_DAYS * 86400000 - Date.now()) / 86400000)); }
+// A lead goes to the trash with everything on it; its estimates are tombstoned explicitly so the
+// cloud removes them with it (and brings them back on a restore).
+function trashContact(c) {
+  if (!c || !c.id) return '';
+  const saleIds = (Array.isArray(c.sales) ? c.sales : []).map(s => s && s.id).filter(Boolean);
+  const { sales, ...rest } = c;
+  const item = cloudMode() ? rest : c;
+  recordDeletion(c.id, ...saleIds);
+  state.contacts = (state.contacts || []).filter(x => x.id !== c.id);
+  if (ui.drawerContactId === c.id) ui.drawerContactId = null;
+  if (ui.selectedContactIds) ui.selectedContactIds.delete(c.id);
+  invalidateDerivedCaches();
+  return pushTrashEntry({ kind: 'contact', itemId: c.id, contactId: c.id, contactName: c.name || c.company || '', brand: c.brand === 'velum' ? 'velum' : 'lumexa', item, saleIds });
+}
+function trashContacts(list) { return list.map(c => trashContact(c)).filter(Boolean); }
+// One record from a lead's list (meetings, calls, sales, …) goes to the trash.
+function trashSubItem(c, field, id) {
+  if (!c || !CONTACT_TRASH_FIELDS.includes(field)) return '';
+  const list = Array.isArray(c[field]) ? c[field] : [];
+  const item = list.find(x => x && x.id === id);
+  if (!item) return '';
+  recordDeletion(id);
+  c[field] = list.filter(x => x.id !== id);
+  if (field === 'projects') syncProjectMirror(c);
+  if (field === 'sales') tidyOptionGroups(c);
+  if (field === 'calls') invalidateNoResponseResult();
+  invalidateDerivedCaches();
+  return pushTrashEntry({ kind: field, itemId: id, contactId: c.id, contactName: c.name || c.company || '', brand: c.brand === 'velum' ? 'velum' : 'lumexa', item });
+}
+// A reminder or automation (workspace-level lists).
+function trashTopLevelItem(field, id) {
+  if (!['calendarEvents', 'tasks'].includes(field)) return '';
+  const list = Array.isArray(state[field]) ? state[field] : [];
+  const item = list.find(x => x && x.id === id);
+  if (!item) return '';
+  recordDeletion(id);
+  state[field] = list.filter(x => x.id !== id);
+  return pushTrashEntry({ kind: field, itemId: id, contactId: '', contactName: '', brand: '', item });
+}
+// Puts the record back where it was. A record from a lead that is itself in the trash brings the
+// lead back first. Returns { ok, reason }.
+function restoreTrashEntry(entryId) {
+  const entry = trashEntry(entryId);
+  if (!entry) return { ok: false, reason: 'gone' };
+  if (entry.kind === 'contact') {
+    forgetDeletion(entry.itemId, ...(entry.saleIds || []));
+    if (!getContact(entry.itemId)) {
+      const c = trashClone(entry.item);
+      c.id = entry.itemId;
+      if (!Array.isArray(c.sales)) c.sales = [];
+      if (cloudMode() && cloud.engine && typeof cloud.engine.deletedSalesFor === 'function') {
+        for (const s of cloud.engine.deletedSalesFor(c.id)) if (!c.sales.some(x => x && x.id === s.id)) c.sales.push(s);
+      }
+      state.contacts = Array.isArray(state.contacts) ? state.contacts : [];
+      state.contacts.unshift(c);
+    }
+  } else if (entry.kind === 'calendarEvents' || entry.kind === 'tasks') {
+    forgetDeletion(entry.itemId);
+    state[entry.kind] = Array.isArray(state[entry.kind]) ? state[entry.kind] : [];
+    if (!state[entry.kind].some(x => x && x.id === entry.itemId)) state[entry.kind].push(trashClone(entry.item));
+  } else {
+    let c = getContact(entry.contactId);
+    if (!c) {
+      const leadEntry = trashEntries().find(e => e.kind === 'contact' && e.itemId === entry.contactId);
+      if (leadEntry) { const r = restoreTrashEntry(leadEntry.id); if (!r.ok) return r; c = getContact(entry.contactId); }
+    }
+    if (!c) return { ok: false, reason: 'lead-missing' };
+    forgetDeletion(entry.itemId);
+    c[entry.kind] = Array.isArray(c[entry.kind]) ? c[entry.kind] : [];
+    if (!c[entry.kind].some(x => x && x.id === entry.itemId)) c[entry.kind].push(trashClone(entry.item));
+    if (entry.kind === 'projects') syncProjectMirror(c);
+    if (entry.kind === 'sales') tidyOptionGroups(c);
+    if (entry.kind === 'calls') invalidateNoResponseResult();
+  }
+  state.trash = (state.trash || []).filter(e => e.id !== entryId);
+  recordDeletion(entryId);
+  invalidateDerivedCaches();
+  return { ok: true, entry };
+}
+// Removes the entry itself; the record stays deleted for good.
+function purgeTrashEntry(entryId) {
+  if (!trashEntry(entryId)) return false;
+  state.trash = (state.trash || []).filter(e => e.id !== entryId);
+  recordDeletion(entryId);
+  return true;
+}
+function emptyTrash(brand) {
+  const ids = trashEntriesForBrand(brand).map(e => e.id);
+  for (const id of ids) purgeTrashEntry(id);
+  return ids.length;
+}
+function trashItemTitle(entry) {
+  const it = entry?.item || {};
+  switch (entry?.kind) {
+    case 'contact': return it.name || it.company || it.email || it.phone || 'Unnamed lead';
+    case 'meetings': return [it.scheduledOn ? fmtDateTime(it.scheduledOn) : '', it.type || it.kind || ''].filter(Boolean).join(' · ') || 'Meeting';
+    case 'calls': return [it.type || it.channel || 'Call', it.at || it.createdAt || it.date ? fmtDateTime(it.at || it.createdAt || it.date) : ''].filter(Boolean).join(' · ');
+    case 'sales': return [typeof it.amount === 'number' || it.amount ? fmtMoney(Number(it.amount || 0)) : '', it.date ? fmtDate(it.date) : '', it.status || ''].filter(Boolean).join(' · ') || 'Estimate';
+    case 'subcontacts': return [it.name, it.role].filter(Boolean).join(' · ') || 'Contact person';
+    case 'addresses': return [it.label, addressOneLine(it)].filter(Boolean).join(' · ') || 'Address';
+    case 'projects': return it.name || 'Project';
+    case 'files': return it.label || it.url || 'File link';
+    case 'calendarEvents': return [it.title, it.date || it.scheduledOn ? fmtDateTime(it.date || it.scheduledOn) : ''].filter(Boolean).join(' · ') || 'Reminder';
+    case 'tasks': return it.name || 'Automation';
+    default: return it.name || it.title || it.label || it.description || TRASH_KIND_LABELS[entry?.kind] || 'Item';
+  }
+}
+function trashKindLabel(entry) { return entry?.kind === 'contact' && isProjectLead(entry.item) ? 'Project lead' : (TRASH_KIND_LABELS[entry?.kind] || 'Item'); }
 
 /* ----------------- three-way merge (base / mine / theirs) -----------------
    Whenever a save is rejected because a teammate (or an automatic Sheets/Meta
@@ -5307,6 +5486,7 @@ function navItems() {
     ['reports','Reports','report', moduleEnabled('reports')],
     ['tasks','Automations','bolt', moduleEnabled('tasks')],
     ['team','Team & Activity','shield', canViewAudit()],
+    ['trash','Trash','trash', true, trashEntriesForBrand().length || ''],
   ];
 }
 function navGroups() { return [{ id:'main', label:'Menu', items: navItems() }]; }
@@ -5490,6 +5670,7 @@ function pageHeadline() {
     case 'tasks':     return 'Tasks & automations.';
     case 'reports':   return 'Daily, weekly & monthly reports · Lumexa and Velum Design together.';
     case 'team':      return 'Team access & edit history.';
+    case 'trash':     return `Deleted items wait here ${TRASH_KEEP_DAYS} days, then disappear for good.`;
     case 'settings':  return 'Make the CRM feel like yours.';
   }
   return '';
@@ -5515,6 +5696,7 @@ function renderPage() {
       case 'reports':   root.innerHTML = renderReports(); break;
       case 'team':      root.innerHTML = renderTeamActivity(); break;
       case 'settings':  root.innerHTML = renderWorkspaceSettings(); break;
+      case 'trash':     root.innerHTML = renderTrash(); break;
     }
   } catch (e) {
     // One bad record (e.g. a meeting with both dates cleared) used to throw here and leave the
@@ -6404,6 +6586,7 @@ function bulkCategoryBarHtml() {
           <option value="__clear__">— Remove region —</option>
         </select>
         <button class="btn btn-ghost" data-action="apply-bulk-region" data-testid="btn-apply-bulk-region">Apply region</button>
+        <button class="btn btn-danger" data-action="bulk-delete-contacts" data-testid="btn-bulk-delete" title="Moves the selected leads to the Trash; restorable for ${TRASH_KEEP_DAYS} days">${svgIcon('trash')} Move to trash</button>
         <button class="btn btn-ghost" data-action="clear-contact-selection" data-testid="btn-clear-selection">Clear selection</button>
       </div>
     </div>`;
@@ -6567,6 +6750,17 @@ function bindBulkCategoryBarHandlers() {
     ui.selectedContactIds.clear();
     saveState(); renderPage();
     toast(`Updated ${ids.size} contact${ids.size===1?'':'s'}.`);
+  }));
+  document.querySelectorAll('[data-action="bulk-delete-contacts"]').forEach(el => el.addEventListener('click', () => {
+    const ids = new Set(ui.selectedContactIds);
+    if (!ids.size) return;
+    const picked = (state.contacts || []).filter(c => ids.has(c.id));
+    if (!picked.length) return;
+    if (!confirm(`Move ${picked.length} lead${picked.length===1?'':'s'} to the trash? Everything on them goes along, and they can be restored from the Trash for ${TRASH_KEEP_DAYS} days.`)) return;
+    const entryIds = trashContacts(picked);
+    ui.selectedContactIds.clear();
+    saveState(); renderAll();
+    toastUndo(`${entryIds.length} lead${entryIds.length===1?'':'s'} moved to the trash.`, entryIds);
   }));
   document.querySelectorAll('[data-action="clear-contact-selection"]').forEach(el => el.addEventListener('click', () => {
     ui.selectedContactIds.clear();
@@ -7492,9 +7686,58 @@ function renderWorkspaceSettings() {
           <button data-testid="btn-import-contacts-json" data-action="import-contacts-json" class="btn btn-ghost" title="For migrating a full export from another CRM">${svgIcon('upload')} Import contacts (.json)</button>
           <button data-testid="btn-find-duplicates" data-action="find-duplicates" class="btn btn-ghost">${svgIcon('search')} Find duplicate leads</button>
           <button data-testid="btn-tidy-phones" data-action="tidy-phones" class="btn btn-ghost" title="Writes every phone number as (305) 555-0100 or +420 777 123 456; the digits never change">${svgIcon('phone')} Tidy phone numbers</button>
+          <button data-testid="btn-open-trash" data-action="open-trash" class="btn btn-ghost" title="Deleted leads, meetings, estimates and more wait here ${TRASH_KEEP_DAYS} days">${svgIcon('trash')} Open the trash${trashEntriesForBrand().length ? ` (${trashEntriesForBrand().length})` : ''}</button>
         </div>` : ''}
       </section>
     </div>`;
+}
+
+/* ----------------- Trash ----------------- */
+function renderTrash() {
+  const entries = trashEntriesForBrand();
+  const canPurge = canManageUsers();
+  const rows = entries.map(entry => {
+    const where = entry.kind === 'contact' ? '' : (entry.contactName ? `on ${entry.contactName}` : '');
+    const by = entry.byName || (entry.byUserId ? (rosterUser(entry.byUserId)?.name || '') : '');
+    const days = trashDaysLeft(entry);
+    return `<div class="trash-row" data-testid="trash-row-${esc(entry.id)}">
+      <span class="trash-kind">${esc(trashKindLabel(entry))}</span>
+      <div class="min-w-0 flex-1">
+        <div class="trash-title truncate">${esc(trashItemTitle(entry))}${where ? ` <span class="text-ash font-normal">· ${esc(where)}</span>` : ''}</div>
+        <div class="trash-meta">Deleted ${esc(relativeDayLabel(entry.deletedAt) || fmtDateTime(entry.deletedAt))}${by ? ` by ${esc(by)}` : ''} · ${days <= 1 ? 'goes for good within a day' : `${days} days left`}</div>
+      </div>
+      <button class="btn btn-primary" data-action="restore-trash" data-id="${esc(entry.id)}" data-testid="btn-restore-${esc(entry.id)}">${svgIcon('refresh')} Restore</button>
+      ${canPurge ? `<button class="btn btn-ghost" data-action="purge-trash" data-id="${esc(entry.id)}" data-testid="btn-purge-${esc(entry.id)}" title="Removes it for good, right now">Delete forever</button>` : ''}
+    </div>`;
+  }).join('');
+  return `
+    <div class="card p-5 mb-4 flex items-center justify-between gap-4 flex-wrap" data-testid="trash-head">
+      <div class="text-sm"><strong>${entries.length}</strong> ${entries.length === 1 ? 'item' : 'items'} in the trash · ${esc(BRANDS[activeBrand()]?.name || '')}<div class="text-xs text-ash mt-1">Restore puts a lead, meeting, estimate or anything else back exactly where it was. Anything older than ${TRASH_KEEP_DAYS} days leaves on its own.</div></div>
+      ${entries.length && canPurge ? `<button class="btn btn-danger" data-action="empty-trash" data-testid="btn-empty-trash">${svgIcon('trash')} Empty trash</button>` : ''}
+    </div>
+    ${entries.length ? `<div class="card" data-testid="trash-list">${rows}</div>` : `<div class="card px-5 py-10 text-center text-ash text-sm" data-testid="trash-empty">The trash is empty. Deleted leads, meetings, estimates and more land here and can be restored for ${TRASH_KEEP_DAYS} days.</div>`}`;
+}
+function bindTrashHandlers(root) {
+  const scope = root || document;
+  scope.querySelectorAll('[data-action="restore-trash"]').forEach(el => el.addEventListener('click', () => {
+    const r = restoreTrashEntry(el.getAttribute('data-id'));
+    saveState(); renderAll();
+    toast(r.ok ? `${trashKindLabel(r.entry)} restored.` : (r.reason === 'lead-missing' ? 'The lead this belonged to is gone for good, so it cannot go back.' : 'Already gone.'));
+  }));
+  scope.querySelectorAll('[data-action="purge-trash"]').forEach(el => el.addEventListener('click', () => {
+    const entry = trashEntry(el.getAttribute('data-id'));
+    if (!entry || !confirm(`Delete "${trashItemTitle(entry)}" forever? This cannot be undone.`)) return;
+    purgeTrashEntry(entry.id);
+    saveState(); renderAll();
+    toast('Deleted forever.');
+  }));
+  scope.querySelectorAll('[data-action="empty-trash"]').forEach(el => el.addEventListener('click', () => {
+    const n = trashEntriesForBrand().length;
+    if (!n || !confirm(`Delete all ${n} item${n===1?'':'s'} in the trash forever? This cannot be undone.`)) return;
+    emptyTrash();
+    saveState(); renderAll();
+    toast('Trash emptied.');
+  }));
 }
 
 /* ----------------- Tasks ----------------- */
@@ -9602,7 +9845,7 @@ function renderContactDrawer() {
       </section>
 
       <div class="px-7 py-4 bg-paper border-t border-sand flex justify-between">
-        <button class="btn btn-danger" data-action="delete-contact" data-testid="btn-delete-contact">${svgIcon('trash')} Delete contact</button>
+        <button class="btn btn-danger" data-action="delete-contact" data-testid="btn-delete-contact" title="Goes to the Trash; restorable for ${TRASH_KEEP_DAYS} days">${svgIcon('trash')} Move to trash</button>
         <button class="btn btn-primary" data-action="close-drawer">Done</button>
       </div>
     </aside>
@@ -9797,6 +10040,7 @@ function bindSidebarHandlers() {
     if (a === 'import-xlsx')   el.addEventListener('click', importXlsx);
     if (a === 'find-duplicates') el.addEventListener('click', findDuplicateLeads);
     if (a === 'tidy-phones') el.addEventListener('click', tidyPhoneNumbers);
+    if (a === 'open-trash') el.addEventListener('click', () => navigateTo('trash'));
     if (a === 'pull-cloud')    el.addEventListener('click', () => pullFromBackend(false));
     if (a === 'logout')        el.addEventListener('click', logout);
     if (a === 'toggle-mobile-nav') el.addEventListener('click', () => { ui.mobileNavOpen = !ui.mobileNavOpen; renderAll(); });
@@ -10211,9 +10455,8 @@ function bindPageHandlers() {
     const id = el.getAttribute('data-calendar-delete');
     const event = (state.calendarEvents || []).find(item => item.id === id);
     if (!event || !confirm(`Delete reminder "${event.title}"?`)) return;
-    recordDeletion(id);
-    state.calendarEvents = state.calendarEvents.filter(item => item.id !== id);
-    saveState(); renderPage(); toast('Reminder deleted.');
+    const entryId = trashTopLevelItem('calendarEvents', id);
+    saveState(); renderPage(); toastUndo('Reminder moved to the trash.', [entryId]);
   }));
 
   // Contacts tabs (lightweight refresh, not full page render)
@@ -10455,7 +10698,9 @@ function bindPageHandlersRest() {
     if (a === 'import-xlsx') el.addEventListener('click', importXlsx);
     if (a === 'find-duplicates') el.addEventListener('click', findDuplicateLeads);
     if (a === 'tidy-phones') el.addEventListener('click', tidyPhoneNumbers);
+    if (a === 'open-trash') el.addEventListener('click', () => navigateTo('trash'));
   });
+  if (ui.page === 'trash') bindTrashHandlers(document.getElementById('page-root'));
 
   // Row clicks
   document.querySelectorAll('[data-action="open-contact"]').forEach(el => {
@@ -10797,11 +11042,11 @@ function bindDrawerHandlers() {
   document.querySelectorAll('[data-action="remove-project"]').forEach(el => el.addEventListener('click', () => {
     const p = findProject(c, el.getAttribute('data-project-id'));
     if (!p) return;
-    if (!confirm(`Remove ${projectName(c, p)} from ${c.name || 'this lead'}? Estimates stay on the lead.`)) return;
-    c.projects = contactProjects(c).filter(item => item.id !== p.id);
-    recordDeletion(p.id);
-    syncProjectMirror(c);
+    if (!confirm(`Remove ${projectName(c, p)} from ${c.name || 'this lead'}? Estimates stay on the lead; the project waits in the trash.`)) return;
+    c.projects = contactProjects(c);
+    const entryId = trashSubItem(c, 'projects', p.id);
     saveState(); renderContactDrawer();
+    toastUndo('Project moved to the trash.', [entryId]);
     if (ui.page === 'projects' || ui.page === 'contacts') renderPage();
     toast(`${projectName(c, p)} removed.`);
   }));
@@ -10943,10 +11188,10 @@ function bindDrawerHandlers() {
   document.querySelectorAll('[data-action="delete-subcontact"]').forEach(el => {
     el.addEventListener('click', () => {
       const person = (c.subcontacts || []).find(item => item.id === el.getAttribute('data-id'));
-      if (!person || !confirm(`Delete ${person.name} from this company?`)) return;
-      recordDeletion(person.id);
-      c.subcontacts = (c.subcontacts || []).filter(item => item.id !== person.id);
+      if (!person || !confirm(`Remove ${person.name} from this company?`)) return;
+      const entryId = trashSubItem(c, 'subcontacts', person.id);
       saveState();
+      toastUndo(`${person.name} moved to the trash.`, [entryId]);
       if (ui.page === 'contacts') renderPage();
       renderContactDrawer();
       toast('Company contact removed.');
@@ -10997,10 +11242,10 @@ function bindDrawerHandlers() {
   document.querySelectorAll('[data-action="delete-address"]').forEach(el => {
     el.addEventListener('click', () => {
       const a = (c.addresses || []).find(item => item.id === el.getAttribute('data-id'));
-      if (!a || !confirm(`Delete the ${a.label || ''} address ${addressOneLine(a)}?`)) return;
-      recordDeletion(a.id);
-      c.addresses = (c.addresses || []).filter(item => item.id !== a.id);
+      if (!a || !confirm(`Remove the ${a.label || ''} address ${addressOneLine(a)}?`)) return;
+      const entryId = trashSubItem(c, 'addresses', a.id);
       saveState();
+      toastUndo('Address moved to the trash.', [entryId]);
       if (ui.page === 'contacts') renderPage();
       renderContactDrawer();
       toast('Address removed.');
@@ -11072,7 +11317,7 @@ function bindDrawerHandlers() {
     });
   }));
   document.querySelectorAll('[data-action="delete-meeting"]').forEach(el => {
-    el.addEventListener('click', () => { if (!confirm('Delete this meeting?')) return; recordDeletion(el.getAttribute('data-id')); c.meetings = (c.meetings||[]).filter(x => x.id !== el.getAttribute('data-id')); saveState(); renderContactDrawer(); });
+    el.addEventListener('click', () => { if (!confirm('Delete this meeting?')) return; const entryId = trashSubItem(c, 'meetings', el.getAttribute('data-id')); saveState(); renderContactDrawer(); toastUndo('Meeting moved to the trash.', [entryId]); });
   });
   // Enter / cancel / save meeting edit
   document.querySelectorAll('[data-action="edit-meeting"]').forEach(el => {
@@ -11205,7 +11450,7 @@ function bindDrawerHandlers() {
     });
   });
   document.querySelectorAll('[data-action="delete-call"]').forEach(el => {
-    el.addEventListener('click', () => { if (!confirm('Delete this log entry?')) return; recordDeletion(el.getAttribute('data-id')); c.calls = (c.calls||[]).filter(x => x.id !== el.getAttribute('data-id')); invalidateNoResponseResult(); saveState(); renderContactDrawer(); });
+    el.addEventListener('click', () => { if (!confirm('Delete this log entry?')) return; const entryId = trashSubItem(c, 'calls', el.getAttribute('data-id')); saveState(); renderContactDrawer(); toastUndo('Log entry moved to the trash.', [entryId]); });
   });
   // Enter edit mode for a comm entry
   document.querySelectorAll('[data-action="edit-comm"]').forEach(el => {
@@ -11270,10 +11515,9 @@ function bindDrawerHandlers() {
     const id = el.getAttribute('data-id');
     const f = (c.files || []).find(x => x.id === id); if (!f) return;
     if (!confirm(`Remove the link "${f.label || fileLinkHost(f.url)}"? The files in the cloud are not touched.`)) return;
-    recordDeletion(id);
-    c.files = c.files.filter(x => x.id !== id);
+    const entryId = trashSubItem(c, 'files', id);
     saveState(); renderContactDrawer();
-    toast('Link removed.');
+    toastUndo('Link moved to the trash.', [entryId]);
   }));
 
   document.querySelectorAll('[data-action="add-render-request"]').forEach(el => {
@@ -11306,10 +11550,9 @@ function bindDrawerHandlers() {
   document.querySelectorAll('[data-action="delete-render-request"]').forEach(el => {
     el.addEventListener('click', () => {
       if (!confirm('Delete this render request?')) return;
-      recordDeletion(el.getAttribute('data-id'));
-      c.renderRequests = (c.renderRequests || []).filter(x => x.id !== el.getAttribute('data-id'));
+      const entryId = trashSubItem(c, 'renderRequests', el.getAttribute('data-id'));
       saveState(); renderContactDrawer();
-      toast('Render request deleted.');
+      toastUndo('Render request moved to the trash.', [entryId]);
     });
   });
   document.querySelectorAll('[data-action="edit-render-request"]').forEach(el => {
@@ -11369,10 +11612,9 @@ function bindDrawerHandlers() {
   document.querySelectorAll('[data-action="delete-render"]').forEach(el => {
     el.addEventListener('click', () => {
       if (!confirm('Delete this render?')) return;
-      recordDeletion(el.getAttribute('data-id'));
-      c.renders = (c.renders || []).filter(x => x.id !== el.getAttribute('data-id'));
+      const entryId = trashSubItem(c, 'renders', el.getAttribute('data-id'));
       saveState(); renderContactDrawer();
-      toast('Render record deleted.');
+      toastUndo('Render moved to the trash.', [entryId]);
     });
   });
   document.querySelectorAll('[data-action="edit-render"]').forEach(el => {
@@ -11531,7 +11773,7 @@ function bindDrawerHandlers() {
     });
   });
   document.querySelectorAll('[data-action="delete-sale"]').forEach(el => {
-    el.addEventListener('click', () => { if (!confirm('Delete this estimate / sale?')) return; recordDeletion(el.getAttribute('data-id')); c.sales = (c.sales||[]).filter(x => x.id !== el.getAttribute('data-id')); tidyOptionGroups(c); saveState(); renderContactDrawer(); });
+    el.addEventListener('click', () => { if (!confirm('Delete this estimate / sale?')) return; const entryId = trashSubItem(c, 'sales', el.getAttribute('data-id')); saveState(); renderContactDrawer(); toastUndo('Estimate moved to the trash.', [entryId]); });
   });
   // Owner-only fix for a sale that was logged or marked sold by the wrong person (e.g. a
   // manager entering it on a teammate's behalf) — corrects who gets commission credit without
@@ -11606,9 +11848,9 @@ function bindDrawerHandlers() {
   document.querySelectorAll('[data-action="delete-order"]').forEach(el => {
     el.addEventListener('click', () => {
       if (!confirm('Delete this production order?')) return;
-      recordDeletion(el.getAttribute('data-order-id'));
-      c.orders = (c.orders || []).filter(x => x.id !== el.getAttribute('data-order-id'));
+      const entryId = trashSubItem(c, 'orders', el.getAttribute('data-order-id'));
       saveState(); renderContactDrawer();
+      toastUndo('Production order moved to the trash.', [entryId]);
     });
   });
   document.querySelectorAll('[data-action="toggle-order-flag"]').forEach(el => {
@@ -11712,16 +11954,13 @@ function bindDrawerHandlers() {
     toast(makingCampaign ? 'Marked as an advertisement campaign lead.' : 'Moved back to regular leads.');
   });
 
-  // Delete contact
+  // Delete contact → trash (restorable for TRASH_KEEP_DAYS)
   const btnDel = document.querySelector('[data-action="delete-contact"]');
   if (btnDel) btnDel.addEventListener('click', () => {
-    if (!confirm(`Delete contact "${c.name}"? This cannot be undone.`)) return;
-    // Contacts holding financial records are deliberately kept by the backend (it re-adds them),
-    // so only tombstone the ones that will actually stay deleted.
-    if (!(c.sales || []).length) recordDeletion(c.id);
-    state.contacts = state.contacts.filter(x => x.id !== c.id);
-    ui.drawerContactId = null;
+    if (!confirm(`Move "${c.name || 'this lead'}" to the trash? It can be restored from the Trash for ${TRASH_KEEP_DAYS} days.`)) return;
+    const entryId = trashContact(c);
     saveState(); renderAll();
+    toastUndo(`${c.name || 'Lead'} moved to the trash.`, [entryId]);
   });
 }
 
@@ -11751,12 +11990,10 @@ function isBlankContact(c) {
 function cleanupBlankContacts() {
   const blanks = visibleContacts().filter(isBlankContact);
   if (!blanks.length) { toast('No empty draft contacts found.'); return; }
-  if (!confirm(`Delete ${blanks.length} empty draft contact${blanks.length===1?'':'s'} with no information entered? This cannot be undone.`)) return;
-  const blankIds = new Set(blanks.map(item => item.id));
-  recordDeletion(...blankIds);
-  state.contacts = state.contacts.filter(item => !blankIds.has(item.id));
-  if (blankIds.has(ui.drawerContactId)) ui.drawerContactId = null;
+  if (!confirm(`Move ${blanks.length} empty draft contact${blanks.length===1?'':'s'} with no information entered to the trash?`)) return;
+  const entryIds = trashContacts(blanks);
   saveState(); renderAll();
+  toastUndo(`${entryIds.length} empty draft${entryIds.length===1?'':'s'} moved to the trash.`, entryIds);
   toast(`Deleted ${blanks.length} empty draft contact${blanks.length===1?'':'s'}.`);
 }
 
@@ -12058,9 +12295,8 @@ function runTask(id, options = {}) {
 }
 function deleteTask(id) {
   if (!confirm('Delete this task?')) return;
-  recordDeletion(id);
-  state.tasks = state.tasks.filter(x => x.id !== id);
-  saveState(); renderPage();
+  const entryId = trashTopLevelItem('tasks', id);
+  saveState(); renderPage(); toastUndo('Automation moved to the trash.', [entryId]);
 }
 
 /* ----------------- Backup / Import ----------------- */
@@ -12745,6 +12981,28 @@ function toast(msg) {
   root.innerHTML = `<div class="toast" data-testid="toast">${esc(msg)}</div>`;
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { root.innerHTML = ''; }, 2400);
+}
+// "Moved to the trash · Undo": the undo restores the given trash entries on the spot.
+function toastUndo(msg, entryIds) {
+  const ids = (entryIds || []).filter(Boolean);
+  ui.lastTrashEntryIds = ids;
+  const root = document.getElementById('toast-root');
+  if (!root) return;
+  root.innerHTML = `<div class="toast toast-undo" data-testid="toast">${esc(msg)}${ids.length ? ` <button type="button" class="toast-undo-btn" data-action="undo-trash" data-testid="btn-undo-trash">Undo</button>` : ''}</div>`;
+  const btn = root.querySelector && root.querySelector('[data-action="undo-trash"]');
+  if (btn) btn.addEventListener('click', () => { root.innerHTML = ''; undoLastTrash(); });
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { root.innerHTML = ''; }, 8000);
+}
+function undoLastTrash() {
+  const ids = ui.lastTrashEntryIds || [];
+  ui.lastTrashEntryIds = [];
+  let n = 0;
+  for (const id of ids) if (restoreTrashEntry(id).ok) n++;
+  if (!n) { toast('Nothing to undo.'); return 0; }
+  saveState(); renderAll();
+  toast(n === 1 ? 'Restored.' : `Restored ${n} items.`);
+  return n;
 }
 
 /* ----------------- modal forms ----------------- */

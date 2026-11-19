@@ -148,6 +148,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     calendarEvent: 'calendarEvents',
     salesActivity: 'salesActivities',
     activity: 'activity',
+    trashItem: 'trash', // deleted records waiting for a restore (see the trash in the CRM)
   };
   const REPORT_KINDS = { dailyReport: 'dailyReports', weeklyReport: 'weeklyReports', monthlyReport: 'monthlyReports' };
   const PER_USER_KINDS = { payRate: 'payRates', payPlan: 'payPlans', userPref: 'userPrefs' };
@@ -522,12 +523,27 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       return summary;
     }
 
+    // The estimates of a deleted lead, as this device last saw them (soft-deleted rows stay in
+    // the mirror). Restoring the lead puts them back; people who may not see a sale never hold it.
+    deletedSalesFor(contactId) {
+      const out = [];
+      for (const row of this.mirror.values()) {
+        if (row.kind !== 'sale' || !row.deleted_at || !isObject(row.data) || String(row.data.contactId) !== String(contactId)) continue;
+        const { contactId: _cid, ...sale } = row.data;
+        out.push({ ...clone(sale), id: row.id });
+      }
+      return out;
+    }
+
     // Apply rows (from pull() or push().merged) onto the live state object in place.
     // Returns the set of contact ids touched (for targeted re-rendering).
     applyToState(state, rows) {
       const touched = new Set();
       state.contacts = Array.isArray(state.contacts) ? state.contacts : [];
       state.tombstones = Array.isArray(state.tombstones) ? state.tombstones : [];
+      // A row that arrives alive again was restored (from the trash) on another device: its
+      // tombstone must go, or the next merge here would strip it and the next push re-delete it.
+      const untomb = (id) => { for (let i = state.tombstones.length - 1; i >= 0; i--) if (state.tombstones[i] && state.tombstones[i].id === id) state.tombstones.splice(i, 1); };
       const index = () => new Map(state.contacts.map((c, i) => [String(c.id), i]));
       let byId = index();
       const ensureList = (field) => { if (!Array.isArray(state[field])) state[field] = []; return state[field]; };
@@ -540,6 +556,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
             if (i != null) { state.contacts.splice(i, 1); byId = index(); }
             if (!state.tombstones.some(t => t && t.id === row.id)) state.tombstones.push({ id: row.id, deletedAt: row.deleted_at });
           } else {
+            untomb(row.id);
             const existing = i != null ? state.contacts[i] : null;
             const next = { ...data, id: row.id, sales: existing ? existing.sales : [] };
             if (existing) { for (const k of Object.keys(existing)) if (!(k in next)) delete existing[k]; Object.assign(existing, next); }
@@ -559,6 +576,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
             touched.add(String(contactId));
           }
           if (row.deleted_at && !state.tombstones.some(t => t && t.id === row.id)) state.tombstones.push({ id: row.id, deletedAt: row.deleted_at });
+          else if (!row.deleted_at) untomb(row.id);
         } else if (row.kind === 'settings') {
           state.settings = { ...data, payRates: (state.settings && state.settings.payRates) || {} };
         } else if (row.kind === 'payRate') {
@@ -580,8 +598,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           const list = ensureList(LIST_KINDS[row.kind]);
           const j = list.findIndex(x => x && String(x.id) === row.id);
           if (row.deleted_at) { if (j >= 0) list.splice(j, 1); if (!state.tombstones.some(t => t && t.id === row.id)) state.tombstones.push({ id: row.id, deletedAt: row.deleted_at }); }
-          else if (j >= 0) list[j] = { ...data, id: row.id };
-          else list.push({ ...data, id: row.id });
+          else { untomb(row.id); if (j >= 0) list[j] = { ...data, id: row.id }; else list.push({ ...data, id: row.id }); }
         }
       }
       return touched;
@@ -1022,6 +1039,13 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     .kbd { font-family:'JetBrains Mono', monospace; font-size:11px; padding:2px 6px; background:var(--crm-sand); border-radius:7px; color:var(--crm-ash-dark); }
     .grain { background-image: radial-gradient(rgba(11,15,20,0.05) 1px, transparent 1px); background-size: 18px 18px; }
     .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background:var(--crm-ink); color:var(--crm-paper-soft); padding:10px 16px; border-radius:10px; font-size:13px; z-index:80; box-shadow:0 10px 30px rgba(15,23,42,0.25); }
+    .toast-undo-btn { margin-left: 12px; padding: 3px 10px; border-radius: 999px; background: var(--crm-paper-soft); color: var(--crm-ink); font-weight: 600; font-size: 12px; }
+    .toast-undo-btn:hover { background: #fff; }
+    .trash-row { display:flex; align-items:center; gap:14px; padding:12px 16px; border-top:1px solid var(--crm-sand); }
+    .trash-row:first-child { border-top:0; }
+    .trash-kind { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--crm-ash); min-width:7.5rem; }
+    .trash-title { font-weight:600; }
+    .trash-meta { font-size:12px; color:var(--crm-ash); }
     .modal-bg { position:fixed; inset:0; background: rgba(11,15,20,0.5); z-index:60; backdrop-filter: blur(2px); }
     .modal-card { position:fixed; top:50%; left:50%; transform: translate(-50%,-50%); width:480px; max-width:92vw; background:var(--crm-surface); border:1px solid var(--crm-line); border-radius:var(--crm-r-lg); z-index:61; box-shadow: 0 30px 80px rgba(15,23,42,0.24); max-height:90vh; overflow-y:auto; }
     details > summary { list-style: none; cursor: pointer; }
@@ -1462,7 +1486,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
 const STORAGE_KEY = 'lumexa_crm_state_v2';
 const CLOUD_BASE_STORAGE_KEY = 'lumexa_crm_cloud_base_v1';
-const CRM_BUILD_BADGE = 'build 2026-11-17.10';
+const CRM_BUILD_BADGE = 'build 2026-11-18.2';
 /* ----------------- time zone -----------------
    Every day, week and month boundary and every displayed time follows the workspace time zone
    (Settings → Workspace), Miami by default, so the whole team sees one calendar wherever a
@@ -1542,6 +1566,7 @@ function defaultState() {
   return {
     contacts: [],
     tombstones: [],
+    trash: [],
     tasks: [
       {
         id: cryptoId(),
@@ -1646,25 +1671,99 @@ function cryptoId() { return 'x' + Math.random().toString(36).slice(2, 10) + Dat
 // "+1 305 555 0100" and "1-305-555-0100" are the same number. Numbers typed without a country code
 // are read as the workspace's default country (Settings → Identity); any number may carry its own
 // code with a leading "+" (or "00"). Stored numbers are written back in one consistent format.
+// Every ITU calling code. Countries that share one code are one entry (United States / Canada,
+// Russia / Kazakhstan, …). North American Numbering Plan territories (Bahamas, Jamaica, Puerto Rico, …)
+// share "+1" with an area code of their own, so they carry a four-digit code like "1242"; `codes`
+// lists the extra area codes a country has (Dominican Republic 809 / 829 / 849).
+const PHONE_FAVOURITE_CODES = ['1', '44', '420', '421', '49'];
 const PHONE_COUNTRIES = [
-  { code:'1', iso:'US', name:'United States / Canada' }, { code:'44', iso:'GB', name:'United Kingdom' },
-  { code:'420', iso:'CZ', name:'Czech Republic' }, { code:'421', iso:'SK', name:'Slovakia' },
-  { code:'49', iso:'DE', name:'Germany' }, { code:'43', iso:'AT', name:'Austria' }, { code:'41', iso:'CH', name:'Switzerland' },
-  { code:'33', iso:'FR', name:'France' }, { code:'34', iso:'ES', name:'Spain' }, { code:'39', iso:'IT', name:'Italy' },
-  { code:'31', iso:'NL', name:'Netherlands' }, { code:'32', iso:'BE', name:'Belgium' }, { code:'352', iso:'LU', name:'Luxembourg' },
-  { code:'48', iso:'PL', name:'Poland' }, { code:'36', iso:'HU', name:'Hungary' }, { code:'40', iso:'RO', name:'Romania' },
-  { code:'351', iso:'PT', name:'Portugal' }, { code:'353', iso:'IE', name:'Ireland' },
-  { code:'45', iso:'DK', name:'Denmark' }, { code:'46', iso:'SE', name:'Sweden' }, { code:'47', iso:'NO', name:'Norway' }, { code:'358', iso:'FI', name:'Finland' },
-  { code:'30', iso:'GR', name:'Greece' }, { code:'90', iso:'TR', name:'Turkey' }, { code:'972', iso:'IL', name:'Israel' },
-  { code:'971', iso:'AE', name:'United Arab Emirates' }, { code:'966', iso:'SA', name:'Saudi Arabia' }, { code:'974', iso:'QA', name:'Qatar' },
-  { code:'52', iso:'MX', name:'Mexico' }, { code:'55', iso:'BR', name:'Brazil' }, { code:'54', iso:'AR', name:'Argentina' },
-  { code:'57', iso:'CO', name:'Colombia' }, { code:'56', iso:'CL', name:'Chile' }, { code:'51', iso:'PE', name:'Peru' },
-  { code:'61', iso:'AU', name:'Australia' }, { code:'64', iso:'NZ', name:'New Zealand' },
-  { code:'81', iso:'JP', name:'Japan' }, { code:'82', iso:'KR', name:'South Korea' }, { code:'86', iso:'CN', name:'China' },
-  { code:'91', iso:'IN', name:'India' }, { code:'65', iso:'SG', name:'Singapore' }, { code:'852', iso:'HK', name:'Hong Kong' },
-  { code:'27', iso:'ZA', name:'South Africa' }, { code:'7', iso:'RU', name:'Russia / Kazakhstan' },
+  { code:'93', iso:'AF', name:'Afghanistan' }, { code:'355', iso:'AL', name:'Albania' }, { code:'213', iso:'DZ', name:'Algeria' },
+  { code:'1684', iso:'AS', name:'American Samoa' }, { code:'376', iso:'AD', name:'Andorra' }, { code:'244', iso:'AO', name:'Angola' },
+  { code:'1264', iso:'AI', name:'Anguilla' }, { code:'1268', iso:'AG', name:'Antigua and Barbuda' }, { code:'54', iso:'AR', name:'Argentina' },
+  { code:'374', iso:'AM', name:'Armenia' }, { code:'297', iso:'AW', name:'Aruba' }, { code:'247', iso:'AC', name:'Ascension Island' },
+  { code:'61', iso:'AU', name:'Australia (incl. Christmas and Cocos Islands)' }, { code:'43', iso:'AT', name:'Austria' }, { code:'994', iso:'AZ', name:'Azerbaijan' },
+  { code:'1242', iso:'BS', name:'Bahamas' }, { code:'973', iso:'BH', name:'Bahrain' }, { code:'880', iso:'BD', name:'Bangladesh' },
+  { code:'1246', iso:'BB', name:'Barbados' }, { code:'375', iso:'BY', name:'Belarus' }, { code:'32', iso:'BE', name:'Belgium' },
+  { code:'501', iso:'BZ', name:'Belize' }, { code:'229', iso:'BJ', name:'Benin' }, { code:'1441', iso:'BM', name:'Bermuda' },
+  { code:'975', iso:'BT', name:'Bhutan' }, { code:'591', iso:'BO', name:'Bolivia' }, { code:'387', iso:'BA', name:'Bosnia and Herzegovina' },
+  { code:'267', iso:'BW', name:'Botswana' }, { code:'55', iso:'BR', name:'Brazil' }, { code:'246', iso:'IO', name:'British Indian Ocean Territory (Diego Garcia)' },
+  { code:'1284', iso:'VG', name:'British Virgin Islands' }, { code:'673', iso:'BN', name:'Brunei' }, { code:'359', iso:'BG', name:'Bulgaria' },
+  { code:'226', iso:'BF', name:'Burkina Faso' }, { code:'257', iso:'BI', name:'Burundi' }, { code:'855', iso:'KH', name:'Cambodia' },
+  { code:'237', iso:'CM', name:'Cameroon' }, { code:'238', iso:'CV', name:'Cape Verde' }, { code:'1345', iso:'KY', name:'Cayman Islands' },
+  { code:'236', iso:'CF', name:'Central African Republic' }, { code:'235', iso:'TD', name:'Chad' }, { code:'56', iso:'CL', name:'Chile' },
+  { code:'86', iso:'CN', name:'China' }, { code:'57', iso:'CO', name:'Colombia' }, { code:'269', iso:'KM', name:'Comoros' },
+  { code:'242', iso:'CG', name:'Congo (Brazzaville)' }, { code:'243', iso:'CD', name:'Congo, Democratic Republic (Kinshasa)' }, { code:'682', iso:'CK', name:'Cook Islands' },
+  { code:'506', iso:'CR', name:'Costa Rica' }, { code:'225', iso:'CI', name:'Côte d’Ivoire' }, { code:'385', iso:'HR', name:'Croatia' },
+  { code:'53', iso:'CU', name:'Cuba' }, { code:'599', iso:'CW', name:'Curaçao / Caribbean Netherlands' }, { code:'357', iso:'CY', name:'Cyprus' },
+  { code:'420', iso:'CZ', name:'Czech Republic' }, { code:'45', iso:'DK', name:'Denmark' }, { code:'253', iso:'DJ', name:'Djibouti' },
+  { code:'1767', iso:'DM', name:'Dominica' }, { code:'1809', codes:['1829', '1849'], iso:'DO', name:'Dominican Republic' }, { code:'593', iso:'EC', name:'Ecuador' },
+  { code:'20', iso:'EG', name:'Egypt' }, { code:'503', iso:'SV', name:'El Salvador' }, { code:'240', iso:'GQ', name:'Equatorial Guinea' },
+  { code:'291', iso:'ER', name:'Eritrea' }, { code:'372', iso:'EE', name:'Estonia' }, { code:'268', iso:'SZ', name:'Eswatini (Swaziland)' },
+  { code:'251', iso:'ET', name:'Ethiopia' }, { code:'500', iso:'FK', name:'Falkland Islands / South Georgia' }, { code:'298', iso:'FO', name:'Faroe Islands' },
+  { code:'679', iso:'FJ', name:'Fiji' }, { code:'358', iso:'FI', name:'Finland / Åland Islands' }, { code:'33', iso:'FR', name:'France' },
+  { code:'594', iso:'GF', name:'French Guiana' }, { code:'689', iso:'PF', name:'French Polynesia' }, { code:'241', iso:'GA', name:'Gabon' },
+  { code:'220', iso:'GM', name:'Gambia' }, { code:'995', iso:'GE', name:'Georgia' }, { code:'49', iso:'DE', name:'Germany' },
+  { code:'233', iso:'GH', name:'Ghana' }, { code:'350', iso:'GI', name:'Gibraltar' }, { code:'30', iso:'GR', name:'Greece' },
+  { code:'299', iso:'GL', name:'Greenland' }, { code:'1473', iso:'GD', name:'Grenada' }, { code:'590', iso:'GP', name:'Guadeloupe / Saint Barthélemy / Saint Martin' },
+  { code:'1671', iso:'GU', name:'Guam' }, { code:'502', iso:'GT', name:'Guatemala' }, { code:'224', iso:'GN', name:'Guinea' },
+  { code:'245', iso:'GW', name:'Guinea-Bissau' }, { code:'592', iso:'GY', name:'Guyana' }, { code:'509', iso:'HT', name:'Haiti' },
+  { code:'504', iso:'HN', name:'Honduras' }, { code:'852', iso:'HK', name:'Hong Kong' }, { code:'36', iso:'HU', name:'Hungary' },
+  { code:'354', iso:'IS', name:'Iceland' }, { code:'91', iso:'IN', name:'India' }, { code:'62', iso:'ID', name:'Indonesia' },
+  { code:'98', iso:'IR', name:'Iran' }, { code:'964', iso:'IQ', name:'Iraq' }, { code:'353', iso:'IE', name:'Ireland' },
+  { code:'972', iso:'IL', name:'Israel' }, { code:'39', iso:'IT', name:'Italy / Vatican City' }, { code:'1876', codes:['1658'], iso:'JM', name:'Jamaica' },
+  { code:'81', iso:'JP', name:'Japan' }, { code:'962', iso:'JO', name:'Jordan' }, { code:'254', iso:'KE', name:'Kenya' },
+  { code:'686', iso:'KI', name:'Kiribati' }, { code:'383', iso:'XK', name:'Kosovo' }, { code:'965', iso:'KW', name:'Kuwait' },
+  { code:'996', iso:'KG', name:'Kyrgyzstan' }, { code:'856', iso:'LA', name:'Laos' }, { code:'371', iso:'LV', name:'Latvia' },
+  { code:'961', iso:'LB', name:'Lebanon' }, { code:'266', iso:'LS', name:'Lesotho' }, { code:'231', iso:'LR', name:'Liberia' },
+  { code:'218', iso:'LY', name:'Libya' }, { code:'423', iso:'LI', name:'Liechtenstein' }, { code:'370', iso:'LT', name:'Lithuania' },
+  { code:'352', iso:'LU', name:'Luxembourg' }, { code:'853', iso:'MO', name:'Macau' }, { code:'261', iso:'MG', name:'Madagascar' },
+  { code:'265', iso:'MW', name:'Malawi' }, { code:'60', iso:'MY', name:'Malaysia' }, { code:'960', iso:'MV', name:'Maldives' },
+  { code:'223', iso:'ML', name:'Mali' }, { code:'356', iso:'MT', name:'Malta' }, { code:'692', iso:'MH', name:'Marshall Islands' },
+  { code:'596', iso:'MQ', name:'Martinique' }, { code:'222', iso:'MR', name:'Mauritania' }, { code:'230', iso:'MU', name:'Mauritius' },
+  { code:'52', iso:'MX', name:'Mexico' }, { code:'691', iso:'FM', name:'Micronesia' }, { code:'373', iso:'MD', name:'Moldova' },
+  { code:'377', iso:'MC', name:'Monaco' }, { code:'976', iso:'MN', name:'Mongolia' }, { code:'382', iso:'ME', name:'Montenegro' },
+  { code:'1664', iso:'MS', name:'Montserrat' }, { code:'212', iso:'MA', name:'Morocco / Western Sahara' }, { code:'258', iso:'MZ', name:'Mozambique' },
+  { code:'95', iso:'MM', name:'Myanmar' }, { code:'264', iso:'NA', name:'Namibia' }, { code:'674', iso:'NR', name:'Nauru' },
+  { code:'977', iso:'NP', name:'Nepal' }, { code:'31', iso:'NL', name:'Netherlands' }, { code:'687', iso:'NC', name:'New Caledonia' },
+  { code:'64', iso:'NZ', name:'New Zealand' }, { code:'505', iso:'NI', name:'Nicaragua' }, { code:'227', iso:'NE', name:'Niger' },
+  { code:'234', iso:'NG', name:'Nigeria' }, { code:'683', iso:'NU', name:'Niue' }, { code:'672', iso:'NF', name:'Norfolk Island' },
+  { code:'850', iso:'KP', name:'North Korea' }, { code:'389', iso:'MK', name:'North Macedonia' }, { code:'1670', iso:'MP', name:'Northern Mariana Islands' },
+  { code:'47', iso:'NO', name:'Norway / Svalbard' }, { code:'968', iso:'OM', name:'Oman' }, { code:'92', iso:'PK', name:'Pakistan' },
+  { code:'680', iso:'PW', name:'Palau' }, { code:'970', iso:'PS', name:'Palestine' }, { code:'507', iso:'PA', name:'Panama' },
+  { code:'675', iso:'PG', name:'Papua New Guinea' }, { code:'595', iso:'PY', name:'Paraguay' }, { code:'51', iso:'PE', name:'Peru' },
+  { code:'63', iso:'PH', name:'Philippines' }, { code:'48', iso:'PL', name:'Poland' }, { code:'351', iso:'PT', name:'Portugal' },
+  { code:'1787', codes:['1939'], iso:'PR', name:'Puerto Rico' }, { code:'974', iso:'QA', name:'Qatar' }, { code:'262', iso:'RE', name:'Réunion / Mayotte' },
+  { code:'40', iso:'RO', name:'Romania' }, { code:'7', iso:'RU', name:'Russia / Kazakhstan' }, { code:'250', iso:'RW', name:'Rwanda' },
+  { code:'290', iso:'SH', name:'Saint Helena / Tristan da Cunha' }, { code:'1869', iso:'KN', name:'Saint Kitts and Nevis' }, { code:'1758', iso:'LC', name:'Saint Lucia' },
+  { code:'508', iso:'PM', name:'Saint Pierre and Miquelon' }, { code:'1784', iso:'VC', name:'Saint Vincent and the Grenadines' }, { code:'685', iso:'WS', name:'Samoa' },
+  { code:'378', iso:'SM', name:'San Marino' }, { code:'239', iso:'ST', name:'São Tomé and Príncipe' }, { code:'966', iso:'SA', name:'Saudi Arabia' },
+  { code:'221', iso:'SN', name:'Senegal' }, { code:'381', iso:'RS', name:'Serbia' }, { code:'248', iso:'SC', name:'Seychelles' },
+  { code:'232', iso:'SL', name:'Sierra Leone' }, { code:'65', iso:'SG', name:'Singapore' }, { code:'1721', iso:'SX', name:'Sint Maarten' },
+  { code:'421', iso:'SK', name:'Slovakia' }, { code:'386', iso:'SI', name:'Slovenia' }, { code:'677', iso:'SB', name:'Solomon Islands' },
+  { code:'252', iso:'SO', name:'Somalia' }, { code:'27', iso:'ZA', name:'South Africa' }, { code:'82', iso:'KR', name:'South Korea' },
+  { code:'211', iso:'SS', name:'South Sudan' }, { code:'34', iso:'ES', name:'Spain' }, { code:'94', iso:'LK', name:'Sri Lanka' },
+  { code:'249', iso:'SD', name:'Sudan' }, { code:'597', iso:'SR', name:'Suriname' }, { code:'46', iso:'SE', name:'Sweden' },
+  { code:'41', iso:'CH', name:'Switzerland' }, { code:'963', iso:'SY', name:'Syria' }, { code:'886', iso:'TW', name:'Taiwan' },
+  { code:'992', iso:'TJ', name:'Tajikistan' }, { code:'255', iso:'TZ', name:'Tanzania' }, { code:'66', iso:'TH', name:'Thailand' },
+  { code:'670', iso:'TL', name:'Timor-Leste' }, { code:'228', iso:'TG', name:'Togo' }, { code:'690', iso:'TK', name:'Tokelau' },
+  { code:'676', iso:'TO', name:'Tonga' }, { code:'1868', iso:'TT', name:'Trinidad and Tobago' }, { code:'216', iso:'TN', name:'Tunisia' },
+  { code:'90', iso:'TR', name:'Turkey' }, { code:'993', iso:'TM', name:'Turkmenistan' }, { code:'1649', iso:'TC', name:'Turks and Caicos Islands' },
+  { code:'688', iso:'TV', name:'Tuvalu' }, { code:'256', iso:'UG', name:'Uganda' }, { code:'380', iso:'UA', name:'Ukraine' },
+  { code:'971', iso:'AE', name:'United Arab Emirates' }, { code:'44', iso:'GB', name:'United Kingdom (incl. Guernsey, Jersey, Isle of Man)' }, { code:'1', iso:'US', name:'United States / Canada' },
+  { code:'598', iso:'UY', name:'Uruguay' }, { code:'1340', iso:'VI', name:'U.S. Virgin Islands' }, { code:'998', iso:'UZ', name:'Uzbekistan' },
+  { code:'678', iso:'VU', name:'Vanuatu' }, { code:'58', iso:'VE', name:'Venezuela' }, { code:'84', iso:'VN', name:'Vietnam' },
+  { code:'681', iso:'WF', name:'Wallis and Futuna' }, { code:'967', iso:'YE', name:'Yemen' }, { code:'260', iso:'ZM', name:'Zambia' },
+  { code:'263', iso:'ZW', name:'Zimbabwe' },
 ];
-const PHONE_CC_BY_LENGTH = PHONE_COUNTRIES.slice().sort((a, b) => b.code.length - a.code.length);
+// Every dialable code (including the extra area codes), longest first so "+1 242" wins over "+1".
+const PHONE_CC_BY_LENGTH = PHONE_COUNTRIES.flatMap(c => [c.code, ...(c.codes || [])]).map(code => ({ code })).sort((a, b) => b.code.length - a.code.length);
+const PHONE_COUNTRY_BY_CODE = new Map(PHONE_COUNTRIES.flatMap(c => [c.code, ...(c.codes || [])].map(code => [code, c])));
+// The list entry for a dial code ('1829' → Dominican Republic), or null.
+function phoneCountryFor(cc) { return PHONE_COUNTRY_BY_CODE.get(String(cc || '')) || null; }
+// A NANP area code → its territory's four-digit code ('242' → '1242'); '' for plain US / Canada codes.
+function nanpTerritoryCode(area) { const c = '1' + String(area || ''); return c.length === 4 && PHONE_COUNTRY_BY_CODE.has(c) ? c : ''; }
+// "+1 242" for display; "+420" for everything else.
+function phoneDialLabel(code) { const c = String(code || ''); return /^1\d{3}$/.test(c) ? `+1 ${c.slice(1)}` : `+${c}`; }
 function defaultCountryCode() {
   const v = String((state && state.workspaceSettings && state.workspaceSettings.defaultCountryCode) || '1').replace(/\D/g, '');
   return v || '1';
@@ -1677,7 +1776,9 @@ function phoneParts(raw) {
 }
 // → { cc, national, ext } or null. cc is '' when the text is too short or carries an unknown code.
 function parsePhone(raw, assumeCc) {
-  const def = String(assumeCc || defaultCountryCode());
+  let def = String(assumeCc || defaultCountryCode());
+  const nanpDefault = /^1\d{3}$/.test(def) ? def : ''; // a Caribbean / Pacific "+1" territory: dial like the US
+  if (nanpDefault) def = '1';
   let text = String(raw || '').trim();
   if (!text) return null;
   let ext = '';
@@ -1690,9 +1791,12 @@ function parsePhone(raw, assumeCc) {
   else if (digits.startsWith('00') && digits.length > 10) { digits = digits.slice(2); explicit = true; }
   else if (digits.startsWith('011') && digits.length > 11 && def === '1') { digits = digits.slice(3); explicit = true; }
   const split = (d) => { const cc = PHONE_CC_BY_LENGTH.find(c => d.startsWith(c.code) && d.length > c.code.length + 5); return cc ? { cc: cc.code, national: d.slice(cc.code.length), ext } : null; };
+  // A ten-digit NANP number: a territory of its own when the area code says so, otherwise US / Canada.
+  const nanp = (d10) => { const t = nanpTerritoryCode(d10.slice(0, 3)); return t ? { cc: t, national: d10.slice(3), ext } : { cc: '1', national: d10, ext }; };
   if (explicit) return split(digits) || { cc: '', national: digits, ext };
-  if (def === '1' && digits.length === 11 && digits[0] === '1') return { cc: '1', national: digits.slice(1), ext };
-  if (def === '1' && digits.length === 10) return { cc: '1', national: digits, ext };
+  if (def === '1' && digits.length === 11 && digits[0] === '1') return nanp(digits.slice(1));
+  if (def === '1' && digits.length === 10) return nanp(digits);
+  if (nanpDefault && digits.length === 7) return { cc: nanpDefault, national: digits, ext };
   if (digits.length > 10) { const s = split(digits); if (s) return s; }
   if (def !== '1') {
     if (digits.startsWith(def) && digits.length > def.length + 6) return { cc: def, national: digits.slice(def.length), ext };
@@ -1725,11 +1829,15 @@ function formatPhone(raw, assumeCc) {
     const local = `(${p.national.slice(0, 3)}) ${p.national.slice(3, 6)}-${p.national.slice(6)}`;
     return (defaultCountryCode() === '1' ? local : `+1 ${local}`) + extra;
   }
+  if (/^1\d{3}$/.test(p.cc) && p.national.length === 7) return `+1 (${p.cc.slice(1)}) ${p.national.slice(0, 3)}-${p.national.slice(3)}${extra}`;
   return `+${p.cc} ${groupPhoneDigits(p.national)}${extra}`;
 }
 function phoneCountryOptionsHtml(selectedCc) {
-  const sel = String(selectedCc || defaultCountryCode());
-  return PHONE_COUNTRIES.map(c => `<option value="${c.code}" ${c.code === sel ? 'selected' : ''} title="${esc(c.name)}">+${c.code} ${esc(c.iso)}</option>`).join('');
+  const selected = phoneCountryFor(selectedCc || defaultCountryCode()) || phoneCountryFor('1');
+  const favourites = PHONE_FAVOURITE_CODES.map(code => phoneCountryFor(code)).filter(Boolean);
+  const rest = PHONE_COUNTRIES.filter(c => !favourites.includes(c)).slice().sort((a, b) => a.name.localeCompare(b.name));
+  const option = (c) => `<option value="${c.code}" ${c === selected ? 'selected' : ''} title="${esc(c.name)}">${phoneDialLabel(c.code)} ${esc(c.iso)} · ${esc(c.name)}</option>`;
+  return favourites.map(option).join('') + '<option disabled>──────────</option>' + rest.map(option).join('');
 }
 
 /* ----------------- duplicate leads ----------------- */
@@ -2878,6 +2986,7 @@ let ui = {
   categoryFilter: 'all',
   regionFilter: 'all',
   selectedContactIds: new Set(),
+  lastTrashEntryIds: [],
   mobileNavOpen: false,
   cloudLoaded: false,      // first successful cloud fetch this session — pushes wait for it
   unsynced: false,         // local edits not yet confirmed by the cloud
@@ -2938,6 +3047,7 @@ function loadState() {
     return mergeWithDefaults(parsed);
   } catch(e) { return defaultState(); }
 }
+const TRASH_KEEP_DAYS = 30;
 function mergeWithDefaults(incoming) {
   const def = defaultState();
   const merged = { ...def, ...incoming };
@@ -3022,6 +3132,18 @@ function mergeWithDefaults(incoming) {
         email: person.email || '',
         phone: person.phone || '',
         notes: person.notes || '',
+      })) : [];
+      // Addresses: office, showroom, delivery / installation site… each a labelled block, kept
+      // beside the lead like the company's people.
+      c.addresses = Array.isArray(c.addresses) ? c.addresses.filter(a => a && typeof a === 'object').map(a => ({
+        id: a.id || cryptoId(),
+        label: typeof a.label === 'string' ? a.label : '',
+        street: typeof a.street === 'string' ? a.street : '',
+        city: typeof a.city === 'string' ? a.city : '',
+        state: typeof a.state === 'string' ? a.state : '',
+        zip: typeof a.zip === 'string' ? a.zip : '',
+        country: typeof a.country === 'string' ? a.country : '',
+        notes: typeof a.notes === 'string' ? a.notes : '',
       })) : [];
       c.calls = Array.isArray(c.calls) ? c.calls.map(log => ({
         ...log,
@@ -3282,6 +3404,20 @@ function mergeWithDefaults(incoming) {
   // browser whose stored reference point predates the record, where plain absence can't be told
   // apart from "never heard of it". Kept 30 days (long enough for every device to sync past the
   // deletion), then dropped. Applied last so it also covers whatever the merge just combined.
+  // Trash: deleted records wait here for a restore, then leave for good after TRASH_KEEP_DAYS.
+  // (Their ids stay tombstoned, so nothing comes back by accident.)
+  const trashCutoff = new Date(Date.now() - TRASH_KEEP_DAYS * 86400000).toISOString();
+  const expiredTrash = [];
+  merged.trash = (Array.isArray(merged.trash) ? merged.trash : []).filter(entry => {
+    if (!entry || typeof entry !== 'object' || !entry.id || !entry.kind || !entry.itemId || !entry.item || typeof entry.item !== 'object') return false;
+    if (typeof entry.deletedAt === 'string' && entry.deletedAt < trashCutoff) { expiredTrash.push(entry.id); return false; }
+    return true;
+  });
+  if (expiredTrash.length) {
+    const now = new Date().toISOString();
+    merged.tombstones = Array.isArray(merged.tombstones) ? merged.tombstones : [];
+    for (const id of expiredTrash) merged.tombstones.push({ id, t: now });
+  }
   const tombstoneCutoff = new Date(Date.now() - 30 * 86400000).toISOString();
   const tombstoneMap = new Map();
   for (const item of (Array.isArray(merged.tombstones) ? merged.tombstones : [])) {
@@ -3296,7 +3432,7 @@ function mergeWithDefaults(incoming) {
     if (Array.isArray(merged.contacts)) {
       merged.contacts = alive(merged.contacts);
       for (const c of merged.contacts) {
-        for (const field of ['calls', 'meetings', 'sales', 'renders', 'renderRequests', 'orders', 'subcontacts', 'files', 'projects']) c[field] = alive(c[field]);
+        for (const field of ['calls', 'meetings', 'sales', 'renders', 'renderRequests', 'orders', 'subcontacts', 'addresses', 'files', 'projects']) c[field] = alive(c[field]);
         for (const sale of (c.sales || [])) {
           if (!Array.isArray(sale.payments) || !sale.payments.length) continue;
           const before = sale.payments.length; sale.payments = alive(sale.payments);
@@ -3847,7 +3983,7 @@ async function cloudLoadTeamData() {
 
 // Port of the old server's crm_audit_changes, computed from the records a save actually changed.
 const CLOUD_AUDIT_CONTACT_FIELDS = { name:'Name', pointOfContact:'Point of contact', email:'Email', phone:'Phone', company:'Company', role:'Role', website:'Website', status:'Status', statusReason:'Status reason', leadType:'Lead type', leadSource:'Lead source', campaignName:'Campaign name', brand:'Brand', nextStep:'Next step', nextActionDue:'Next action date', onHoldUntil:'On Hold follow-up', tags:'Tags', notes:'Notes' };
-const CLOUD_AUDIT_CONTACT_LISTS = [['subcontacts','Company contacts'], ['meetings','Meetings'], ['calls','Communication log'], ['files','Customer files'], ['projects','Projects'], ['orders','Production orders'], ['renders','Renders'], ['renderRequests','Render requests']];
+const CLOUD_AUDIT_CONTACT_LISTS = [['subcontacts','Company contacts'], ['addresses','Addresses'], ['meetings','Meetings'], ['calls','Communication log'], ['files','Customer files'], ['projects','Projects'], ['orders','Production orders'], ['renders','Renders'], ['renderRequests','Render requests']];
 const CLOUD_AUDIT_KINDS = { calendarEvent:'Calendar', task:'Automations', dailyReport:'Daily reports', weeklyReport:'Weekly reports', monthlyReport:'Monthly reports', settings:'Payout settings', payRate:'Payout settings', payPlan:'Pay plans', workspaceSettings:'Workspace settings', leadCategory:'Lead categories', salesActivity:'Legacy financial activity' };
 function cloudAuditEntries(changes) {
   const same = (a, b) => JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
@@ -3938,7 +4074,7 @@ async function cloudImportBackup(parsed) {
 // from a web CRM backup. Only adds — a lead the cloud has never seen, or a meeting, call,
 // estimate, render, order, file, contact person or project the lead here does not have yet.
 // Never changes a value already in the cloud, never brings back what was deleted here.
-const ADD_MISSING_LISTS = { meetings: 'meetings', calls: 'calls', sales: 'estimates', renders: 'renders', renderRequests: 'render requests', orders: 'orders', files: 'files', subcontacts: 'contact people', projects: 'projects' };
+const ADD_MISSING_LISTS = { meetings: 'meetings', calls: 'calls', sales: 'estimates', renders: 'renders', renderRequests: 'render requests', orders: 'orders', files: 'files', subcontacts: 'contact people', addresses: 'addresses', projects: 'projects' };
 function missingFromBackup(parsed, live, map) {
   const cleaned = mergeWithDefaults(remapUserIds(parsed, map));
   const tomb = new Set((live.tombstones || []).map(t => t && String(t.id)));
@@ -4269,7 +4405,7 @@ function ensureRecordIds(s) {
   for (const c of (s.contacts || [])) {
     if (!c || typeof c !== 'object') continue;
     if (!c.id) c.id = cryptoId();
-    for (const f of ['calls','meetings','sales','renders','renderRequests','orders','subcontacts','ownershipHistory','files','projects']) {
+    for (const f of ['calls','meetings','sales','renders','renderRequests','orders','subcontacts','addresses','ownershipHistory','files','projects']) {
       for (const item of (c[f] || [])) if (item && typeof item === 'object' && !item.id) item.id = cryptoId();
     }
     for (const sale of (c.sales || [])) for (const pm of (sale && sale.payments) || []) if (pm && typeof pm === 'object' && !pm.id) pm.id = cryptoId();
@@ -4291,6 +4427,144 @@ function recordDeletion(...ids) {
     state.tombstones.push({ id, t: now });
   }
 }
+// The opposite: these ids are wanted again (a restore from the trash). Removes both shapes of
+// tombstone — the local {id, t} and the cloud's {id, deletedAt}.
+function forgetDeletion(...ids) {
+  const wanted = new Set(ids.filter(Boolean));
+  if (!wanted.size || !Array.isArray(state.tombstones)) return;
+  state.tombstones = state.tombstones.filter(item => !(item && wanted.has(item.id)));
+}
+
+/* ----------------- trash ----------------- */
+// Nothing is deleted outright: a lead, meeting, call, estimate, render, order, contact person,
+// address, project, file link, reminder or automation goes to the trash, where it can be restored
+// for TRASH_KEEP_DAYS. Its id is tombstoned at once (so every device drops it), and a restore
+// forgets the tombstone and puts the record back where it was. A trashed lead's estimates travel
+// inside the entry only without the cloud; with it they stay as soft-deleted rows that only the
+// people allowed to see them hold, and come back with the lead.
+const TRASH_KIND_LABELS = { contact: 'Lead', meetings: 'Meeting', calls: 'Log entry', sales: 'Estimate / sale', renders: 'Render', renderRequests: 'Render request', orders: 'Production order', subcontacts: 'Contact person', addresses: 'Address', projects: 'Project', files: 'File link', calendarEvents: 'Reminder', tasks: 'Automation' };
+const CONTACT_TRASH_FIELDS = ['meetings', 'calls', 'sales', 'renders', 'renderRequests', 'orders', 'subcontacts', 'addresses', 'projects', 'files'];
+function trashClone(v) { return JSON.parse(JSON.stringify(v)); }
+function pushTrashEntry(fields) {
+  state.trash = Array.isArray(state.trash) ? state.trash : [];
+  const entry = { id: cryptoId(), deletedAt: new Date().toISOString(), byUserId: ui.currentUser?.id || '', byName: ui.currentUser?.name || '', ...fields };
+  entry.item = trashClone(entry.item);
+  state.trash.push(entry);
+  ui.lastTrashEntryIds = [entry.id];
+  return entry.id;
+}
+function trashEntries() { return (Array.isArray(state.trash) ? state.trash : []).slice().sort((a, b) => String(b.deletedAt || '').localeCompare(String(a.deletedAt || ''))); }
+function trashEntry(id) { return (Array.isArray(state.trash) ? state.trash : []).find(entry => entry && entry.id === id) || null; }
+function trashEntriesForBrand(brand) { const b = brand || activeBrand(); return trashEntries().filter(entry => !entry.brand || entry.brand === b); }
+function trashDaysLeft(entry) { const t = new Date(entry?.deletedAt || 0).getTime(); return Math.max(0, Math.ceil((t + TRASH_KEEP_DAYS * 86400000 - Date.now()) / 86400000)); }
+// A lead goes to the trash with everything on it; its estimates are tombstoned explicitly so the
+// cloud removes them with it (and brings them back on a restore).
+function trashContact(c) {
+  if (!c || !c.id) return '';
+  const saleIds = (Array.isArray(c.sales) ? c.sales : []).map(s => s && s.id).filter(Boolean);
+  const { sales, ...rest } = c;
+  const item = cloudMode() ? rest : c;
+  recordDeletion(c.id, ...saleIds);
+  state.contacts = (state.contacts || []).filter(x => x.id !== c.id);
+  if (ui.drawerContactId === c.id) ui.drawerContactId = null;
+  if (ui.selectedContactIds) ui.selectedContactIds.delete(c.id);
+  invalidateDerivedCaches();
+  return pushTrashEntry({ kind: 'contact', itemId: c.id, contactId: c.id, contactName: c.name || c.company || '', brand: c.brand === 'velum' ? 'velum' : 'lumexa', item, saleIds });
+}
+function trashContacts(list) { return list.map(c => trashContact(c)).filter(Boolean); }
+// One record from a lead's list (meetings, calls, sales, …) goes to the trash.
+function trashSubItem(c, field, id) {
+  if (!c || !CONTACT_TRASH_FIELDS.includes(field)) return '';
+  const list = Array.isArray(c[field]) ? c[field] : [];
+  const item = list.find(x => x && x.id === id);
+  if (!item) return '';
+  recordDeletion(id);
+  c[field] = list.filter(x => x.id !== id);
+  if (field === 'projects') syncProjectMirror(c);
+  if (field === 'sales') tidyOptionGroups(c);
+  if (field === 'calls') invalidateNoResponseResult();
+  invalidateDerivedCaches();
+  return pushTrashEntry({ kind: field, itemId: id, contactId: c.id, contactName: c.name || c.company || '', brand: c.brand === 'velum' ? 'velum' : 'lumexa', item });
+}
+// A reminder or automation (workspace-level lists).
+function trashTopLevelItem(field, id) {
+  if (!['calendarEvents', 'tasks'].includes(field)) return '';
+  const list = Array.isArray(state[field]) ? state[field] : [];
+  const item = list.find(x => x && x.id === id);
+  if (!item) return '';
+  recordDeletion(id);
+  state[field] = list.filter(x => x.id !== id);
+  return pushTrashEntry({ kind: field, itemId: id, contactId: '', contactName: '', brand: '', item });
+}
+// Puts the record back where it was. A record from a lead that is itself in the trash brings the
+// lead back first. Returns { ok, reason }.
+function restoreTrashEntry(entryId) {
+  const entry = trashEntry(entryId);
+  if (!entry) return { ok: false, reason: 'gone' };
+  if (entry.kind === 'contact') {
+    forgetDeletion(entry.itemId, ...(entry.saleIds || []));
+    if (!getContact(entry.itemId)) {
+      const c = trashClone(entry.item);
+      c.id = entry.itemId;
+      if (!Array.isArray(c.sales)) c.sales = [];
+      if (cloudMode() && cloud.engine && typeof cloud.engine.deletedSalesFor === 'function') {
+        for (const s of cloud.engine.deletedSalesFor(c.id)) if (!c.sales.some(x => x && x.id === s.id)) c.sales.push(s);
+      }
+      state.contacts = Array.isArray(state.contacts) ? state.contacts : [];
+      state.contacts.unshift(c);
+    }
+  } else if (entry.kind === 'calendarEvents' || entry.kind === 'tasks') {
+    forgetDeletion(entry.itemId);
+    state[entry.kind] = Array.isArray(state[entry.kind]) ? state[entry.kind] : [];
+    if (!state[entry.kind].some(x => x && x.id === entry.itemId)) state[entry.kind].push(trashClone(entry.item));
+  } else {
+    let c = getContact(entry.contactId);
+    if (!c) {
+      const leadEntry = trashEntries().find(e => e.kind === 'contact' && e.itemId === entry.contactId);
+      if (leadEntry) { const r = restoreTrashEntry(leadEntry.id); if (!r.ok) return r; c = getContact(entry.contactId); }
+    }
+    if (!c) return { ok: false, reason: 'lead-missing' };
+    forgetDeletion(entry.itemId);
+    c[entry.kind] = Array.isArray(c[entry.kind]) ? c[entry.kind] : [];
+    if (!c[entry.kind].some(x => x && x.id === entry.itemId)) c[entry.kind].push(trashClone(entry.item));
+    if (entry.kind === 'projects') syncProjectMirror(c);
+    if (entry.kind === 'sales') tidyOptionGroups(c);
+    if (entry.kind === 'calls') invalidateNoResponseResult();
+  }
+  state.trash = (state.trash || []).filter(e => e.id !== entryId);
+  recordDeletion(entryId);
+  invalidateDerivedCaches();
+  return { ok: true, entry };
+}
+// Removes the entry itself; the record stays deleted for good.
+function purgeTrashEntry(entryId) {
+  if (!trashEntry(entryId)) return false;
+  state.trash = (state.trash || []).filter(e => e.id !== entryId);
+  recordDeletion(entryId);
+  return true;
+}
+function emptyTrash(brand) {
+  const ids = trashEntriesForBrand(brand).map(e => e.id);
+  for (const id of ids) purgeTrashEntry(id);
+  return ids.length;
+}
+function trashItemTitle(entry) {
+  const it = entry?.item || {};
+  switch (entry?.kind) {
+    case 'contact': return it.name || it.company || it.email || it.phone || 'Unnamed lead';
+    case 'meetings': return [it.scheduledOn ? fmtDateTime(it.scheduledOn) : '', it.type || it.kind || ''].filter(Boolean).join(' · ') || 'Meeting';
+    case 'calls': return [it.type || it.channel || 'Call', it.at || it.createdAt || it.date ? fmtDateTime(it.at || it.createdAt || it.date) : ''].filter(Boolean).join(' · ');
+    case 'sales': return [typeof it.amount === 'number' || it.amount ? fmtMoney(Number(it.amount || 0)) : '', it.date ? fmtDate(it.date) : '', it.status || ''].filter(Boolean).join(' · ') || 'Estimate';
+    case 'subcontacts': return [it.name, it.role].filter(Boolean).join(' · ') || 'Contact person';
+    case 'addresses': return [it.label, addressOneLine(it)].filter(Boolean).join(' · ') || 'Address';
+    case 'projects': return it.name || 'Project';
+    case 'files': return it.label || it.url || 'File link';
+    case 'calendarEvents': return [it.title, it.date || it.scheduledOn ? fmtDateTime(it.date || it.scheduledOn) : ''].filter(Boolean).join(' · ') || 'Reminder';
+    case 'tasks': return it.name || 'Automation';
+    default: return it.name || it.title || it.label || it.description || TRASH_KIND_LABELS[entry?.kind] || 'Item';
+  }
+}
+function trashKindLabel(entry) { return entry?.kind === 'contact' && isProjectLead(entry.item) ? 'Project lead' : (TRASH_KIND_LABELS[entry?.kind] || 'Item'); }
 
 /* ----------------- three-way merge (base / mine / theirs) -----------------
    Whenever a save is rejected because a teammate (or an automatic Sheets/Meta
@@ -5321,6 +5595,7 @@ function navItems() {
     ['reports','Reports','report', moduleEnabled('reports')],
     ['tasks','Automations','bolt', moduleEnabled('tasks')],
     ['team','Team & Activity','shield', canViewAudit()],
+    ['trash','Trash','trash', true, trashEntriesForBrand().length || ''],
   ];
 }
 function navGroups() { return [{ id:'main', label:'Menu', items: navItems() }]; }
@@ -5442,6 +5717,11 @@ function meetingOutcomeLabel(m) {
   const o = meetingOutcome(m);
   return o === 'completed' ? 'Completed' : (o === 'missed' ? `Did not happen · ${meetingMissLabel(m)}` : 'Scheduled');
 }
+const ADDRESS_LABELS = ['Office', 'Showroom', 'Delivery / installation site', 'Billing', 'Home', 'Other'];
+function addressOneLine(a) {
+  return [a?.street, [a?.city, a?.state].filter(Boolean).join(', '), a?.zip, a?.country].map(x => String(x || '').trim()).filter(Boolean).join(', ');
+}
+function addressMapUrl(a) { const q = addressOneLine(a); return q ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}` : ''; }
 function meetingTypeOptions(selected) { return Object.entries(MEETING_TYPES).map(([k, t]) => `<option value="${k}" ${selected === k ? 'selected' : ''}>${t.label}</option>`).join(''); }
 function initialsOf(name) {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
@@ -5499,6 +5779,7 @@ function pageHeadline() {
     case 'tasks':     return 'Tasks & automations.';
     case 'reports':   return 'Daily, weekly & monthly reports · Lumexa and Velum Design together.';
     case 'team':      return 'Team access & edit history.';
+    case 'trash':     return `Deleted items wait here ${TRASH_KEEP_DAYS} days, then disappear for good.`;
     case 'settings':  return 'Make the CRM feel like yours.';
   }
   return '';
@@ -5524,6 +5805,7 @@ function renderPage() {
       case 'reports':   root.innerHTML = renderReports(); break;
       case 'team':      root.innerHTML = renderTeamActivity(); break;
       case 'settings':  root.innerHTML = renderWorkspaceSettings(); break;
+      case 'trash':     root.innerHTML = renderTrash(); break;
     }
   } catch (e) {
     // One bad record (e.g. a meeting with both dates cleared) used to throw here and leave the
@@ -6261,7 +6543,8 @@ function filterContacts() {
         || (c.pointOfContact && c.pointOfContact.toLowerCase().includes(q))
         || (c.campaignName && c.campaignName.toLowerCase().includes(q))
         || contactProjects(c).some(p => p.name && p.name.toLowerCase().includes(q))
-        || (c.subcontacts || []).some(person => [person.name, person.role, person.email, person.phone].some(value => String(value || '').toLowerCase().includes(q)));
+        || (c.subcontacts || []).some(person => [person.name, person.role, person.email, person.phone].some(value => String(value || '').toLowerCase().includes(q)))
+        || (c.addresses || []).some(a => addressOneLine(a).toLowerCase().includes(q) || String(a.label || '').toLowerCase().includes(q));
   }));
 }
 
@@ -6412,6 +6695,7 @@ function bulkCategoryBarHtml() {
           <option value="__clear__">— Remove region —</option>
         </select>
         <button class="btn btn-ghost" data-action="apply-bulk-region" data-testid="btn-apply-bulk-region">Apply region</button>
+        <button class="btn btn-danger" data-action="bulk-delete-contacts" data-testid="btn-bulk-delete" title="Moves the selected leads to the Trash; restorable for ${TRASH_KEEP_DAYS} days">${svgIcon('trash')} Move to trash</button>
         <button class="btn btn-ghost" data-action="clear-contact-selection" data-testid="btn-clear-selection">Clear selection</button>
       </div>
     </div>`;
@@ -6575,6 +6859,17 @@ function bindBulkCategoryBarHandlers() {
     ui.selectedContactIds.clear();
     saveState(); renderPage();
     toast(`Updated ${ids.size} contact${ids.size===1?'':'s'}.`);
+  }));
+  document.querySelectorAll('[data-action="bulk-delete-contacts"]').forEach(el => el.addEventListener('click', () => {
+    const ids = new Set(ui.selectedContactIds);
+    if (!ids.size) return;
+    const picked = (state.contacts || []).filter(c => ids.has(c.id));
+    if (!picked.length) return;
+    if (!confirm(`Move ${picked.length} lead${picked.length===1?'':'s'} to the trash? Everything on them goes along, and they can be restored from the Trash for ${TRASH_KEEP_DAYS} days.`)) return;
+    const entryIds = trashContacts(picked);
+    ui.selectedContactIds.clear();
+    saveState(); renderAll();
+    toastUndo(`${entryIds.length} lead${entryIds.length===1?'':'s'} moved to the trash.`, entryIds);
   }));
   document.querySelectorAll('[data-action="clear-contact-selection"]').forEach(el => el.addEventListener('click', () => {
     ui.selectedContactIds.clear();
@@ -7500,9 +7795,58 @@ function renderWorkspaceSettings() {
           <button data-testid="btn-import-contacts-json" data-action="import-contacts-json" class="btn btn-ghost" title="For migrating a full export from another CRM">${svgIcon('upload')} Import contacts (.json)</button>
           <button data-testid="btn-find-duplicates" data-action="find-duplicates" class="btn btn-ghost">${svgIcon('search')} Find duplicate leads</button>
           <button data-testid="btn-tidy-phones" data-action="tidy-phones" class="btn btn-ghost" title="Writes every phone number as (305) 555-0100 or +420 777 123 456; the digits never change">${svgIcon('phone')} Tidy phone numbers</button>
+          <button data-testid="btn-open-trash" data-action="open-trash" class="btn btn-ghost" title="Deleted leads, meetings, estimates and more wait here ${TRASH_KEEP_DAYS} days">${svgIcon('trash')} Open the trash${trashEntriesForBrand().length ? ` (${trashEntriesForBrand().length})` : ''}</button>
         </div>` : ''}
       </section>
     </div>`;
+}
+
+/* ----------------- Trash ----------------- */
+function renderTrash() {
+  const entries = trashEntriesForBrand();
+  const canPurge = canManageUsers();
+  const rows = entries.map(entry => {
+    const where = entry.kind === 'contact' ? '' : (entry.contactName ? `on ${entry.contactName}` : '');
+    const by = entry.byName || (entry.byUserId ? (rosterUser(entry.byUserId)?.name || '') : '');
+    const days = trashDaysLeft(entry);
+    return `<div class="trash-row" data-testid="trash-row-${esc(entry.id)}">
+      <span class="trash-kind">${esc(trashKindLabel(entry))}</span>
+      <div class="min-w-0 flex-1">
+        <div class="trash-title truncate">${esc(trashItemTitle(entry))}${where ? ` <span class="text-ash font-normal">· ${esc(where)}</span>` : ''}</div>
+        <div class="trash-meta">Deleted ${esc(relativeDayLabel(entry.deletedAt) || fmtDateTime(entry.deletedAt))}${by ? ` by ${esc(by)}` : ''} · ${days <= 1 ? 'goes for good within a day' : `${days} days left`}</div>
+      </div>
+      <button class="btn btn-primary" data-action="restore-trash" data-id="${esc(entry.id)}" data-testid="btn-restore-${esc(entry.id)}">${svgIcon('refresh')} Restore</button>
+      ${canPurge ? `<button class="btn btn-ghost" data-action="purge-trash" data-id="${esc(entry.id)}" data-testid="btn-purge-${esc(entry.id)}" title="Removes it for good, right now">Delete forever</button>` : ''}
+    </div>`;
+  }).join('');
+  return `
+    <div class="card p-5 mb-4 flex items-center justify-between gap-4 flex-wrap" data-testid="trash-head">
+      <div class="text-sm"><strong>${entries.length}</strong> ${entries.length === 1 ? 'item' : 'items'} in the trash · ${esc(BRANDS[activeBrand()]?.name || '')}<div class="text-xs text-ash mt-1">Restore puts a lead, meeting, estimate or anything else back exactly where it was. Anything older than ${TRASH_KEEP_DAYS} days leaves on its own.</div></div>
+      ${entries.length && canPurge ? `<button class="btn btn-danger" data-action="empty-trash" data-testid="btn-empty-trash">${svgIcon('trash')} Empty trash</button>` : ''}
+    </div>
+    ${entries.length ? `<div class="card" data-testid="trash-list">${rows}</div>` : `<div class="card px-5 py-10 text-center text-ash text-sm" data-testid="trash-empty">The trash is empty. Deleted leads, meetings, estimates and more land here and can be restored for ${TRASH_KEEP_DAYS} days.</div>`}`;
+}
+function bindTrashHandlers(root) {
+  const scope = root || document;
+  scope.querySelectorAll('[data-action="restore-trash"]').forEach(el => el.addEventListener('click', () => {
+    const r = restoreTrashEntry(el.getAttribute('data-id'));
+    saveState(); renderAll();
+    toast(r.ok ? `${trashKindLabel(r.entry)} restored.` : (r.reason === 'lead-missing' ? 'The lead this belonged to is gone for good, so it cannot go back.' : 'Already gone.'));
+  }));
+  scope.querySelectorAll('[data-action="purge-trash"]').forEach(el => el.addEventListener('click', () => {
+    const entry = trashEntry(el.getAttribute('data-id'));
+    if (!entry || !confirm(`Delete "${trashItemTitle(entry)}" forever? This cannot be undone.`)) return;
+    purgeTrashEntry(entry.id);
+    saveState(); renderAll();
+    toast('Deleted forever.');
+  }));
+  scope.querySelectorAll('[data-action="empty-trash"]').forEach(el => el.addEventListener('click', () => {
+    const n = trashEntriesForBrand().length;
+    if (!n || !confirm(`Delete all ${n} item${n===1?'':'s'} in the trash forever? This cannot be undone.`)) return;
+    emptyTrash();
+    saveState(); renderAll();
+    toast('Trash emptied.');
+  }));
 }
 
 /* ----------------- Tasks ----------------- */
@@ -9199,7 +9543,7 @@ function renderContactDrawer() {
         <div class="grid grid-cols-2 gap-3 mt-3">
           <div><div class="label">Point of contact</div><input class="input" data-field="pointOfContact" data-testid="contact-poc-input" value="${esc(c.pointOfContact||'')}" placeholder="Person's name"/></div>
           <div><div class="label">Role</div><input class="input" data-field="role" data-testid="contact-role-input" value="${esc(c.role||'')}"/></div>
-          <div><div class="label">Phone</div><div class="flex gap-1"><select class="select shrink-0" style="width:auto;padding-right:1.6rem" data-phone-cc data-testid="contact-phone-cc" aria-label="Country code">${phoneCountryOptionsHtml((parsePhone(c.phone) || {}).cc || defaultCountryCode())}</select><input class="input min-w-0" data-field="phone" data-testid="contact-phone-input" value="${esc(c.phone||'')}" placeholder="(305) 555-0100"/></div></div>
+          <div><div class="label">Phone</div><div class="flex gap-1"><select class="select shrink-0" style="width:auto;max-width:10rem;padding-right:1.6rem" data-phone-cc data-testid="contact-phone-cc" aria-label="Country code">${phoneCountryOptionsHtml((parsePhone(c.phone) || {}).cc || defaultCountryCode())}</select><input class="input min-w-0" data-field="phone" data-testid="contact-phone-input" value="${esc(c.phone||'')}" placeholder="(305) 555-0100"/></div></div>
           <div><div class="label">Email</div><input class="input" data-field="email" data-testid="contact-email-input" value="${esc(c.email||'')}"/></div>
           <div><div class="label">Company</div><input class="input" data-field="company" data-testid="contact-company-input" value="${esc(c.company||'')}"/></div>
           <div>
@@ -9267,6 +9611,32 @@ function renderContactDrawer() {
               <div class="flex items-center gap-1 shrink-0">
                 <button class="btn btn-ghost" data-action="edit-subcontact" data-id="${person.id}" data-testid="btn-edit-subcontact-${person.id}" title="Edit person">${svgIcon('pencil')}</button>
                 <button class="btn btn-danger" data-action="delete-subcontact" data-id="${person.id}" data-testid="btn-delete-subcontact-${person.id}" title="Delete person">${svgIcon('trash')}</button>
+              </div>
+            </div>`).join('')}
+        </div>
+      </details></section>
+      <section data-drawer-pane="lead" class="px-7 py-3 border-b border-sand"><details class="drawer-section" data-drawer-section="addresses" ${ui.drawerAddressesOpen ? 'open' : ''} data-testid="drawer-addresses">
+        <summary>Addresses <small>${(c.addresses || []).length ? `${(c.addresses || []).length} added` : 'none added'}</small></summary>
+        <div class="flex items-center justify-between gap-3 mt-2">
+          <div class="text-xs text-ash">Office, showroom, delivery or installation site — as many as the lead needs.</div>
+          <button class="btn btn-ghost" data-action="add-address" data-testid="btn-add-address">${svgIcon('plus')} Add address</button>
+        </div>
+        <div class="mt-4 divide-row">
+          ${(c.addresses || []).length === 0 ? `<div class="text-sm text-ash py-4">No addresses added for this lead.</div>` : (c.addresses || []).map(a => `
+            <div class="py-4 flex items-start gap-3" data-testid="address-row-${a.id}">
+              <div class="w-9 h-9 rounded-full bg-sand flex items-center justify-center shrink-0">${svgIcon('map')}</div>
+              <div class="flex-1 min-w-0">
+                <div class="font-semibold text-sm">${esc(a.label || 'Address')}</div>
+                <div class="text-sm mt-1 leading-relaxed">${esc(a.street || '')}${a.street ? '<br/>' : ''}${esc([a.city, a.state].filter(Boolean).join(', '))}${a.zip ? ` ${esc(a.zip)}` : ''}${a.country ? `<br/>${esc(a.country)}` : ''}</div>
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs">
+                  ${addressMapUrl(a) ? `<a class="text-ember hover:underline" href="${esc(addressMapUrl(a))}" target="_blank" rel="noopener noreferrer">Open in Maps</a>` : ''}
+                  ${addressOneLine(a) ? `<button type="button" class="hover:underline text-ash" data-action="copy-address" data-id="${a.id}">Copy</button>` : ''}
+                </div>
+                ${a.notes ? `<div class="text-xs mt-2 leading-relaxed text-ash">${esc(a.notes)}</div>` : ''}
+              </div>
+              <div class="flex items-center gap-1 shrink-0">
+                <button class="btn btn-ghost" data-action="edit-address" data-id="${a.id}" data-testid="btn-edit-address-${a.id}" title="Edit address">${svgIcon('pencil')}</button>
+                <button class="btn btn-danger" data-action="delete-address" data-id="${a.id}" data-testid="btn-delete-address-${a.id}" title="Delete address">${svgIcon('trash')}</button>
               </div>
             </div>`).join('')}
         </div>
@@ -9584,7 +9954,7 @@ function renderContactDrawer() {
       </section>
 
       <div class="px-7 py-4 bg-paper border-t border-sand flex justify-between">
-        <button class="btn btn-danger" data-action="delete-contact" data-testid="btn-delete-contact">${svgIcon('trash')} Delete contact</button>
+        <button class="btn btn-danger" data-action="delete-contact" data-testid="btn-delete-contact" title="Goes to the Trash; restorable for ${TRASH_KEEP_DAYS} days">${svgIcon('trash')} Move to trash</button>
         <button class="btn btn-primary" data-action="close-drawer">Done</button>
       </div>
     </aside>
@@ -9779,6 +10149,7 @@ function bindSidebarHandlers() {
     if (a === 'import-xlsx')   el.addEventListener('click', importXlsx);
     if (a === 'find-duplicates') el.addEventListener('click', findDuplicateLeads);
     if (a === 'tidy-phones') el.addEventListener('click', tidyPhoneNumbers);
+    if (a === 'open-trash') el.addEventListener('click', () => navigateTo('trash'));
     if (a === 'pull-cloud')    el.addEventListener('click', () => pullFromBackend(false));
     if (a === 'logout')        el.addEventListener('click', logout);
     if (a === 'toggle-mobile-nav') el.addEventListener('click', () => { ui.mobileNavOpen = !ui.mobileNavOpen; renderAll(); });
@@ -9859,7 +10230,7 @@ function bindPageHandlers() {
   // Workspace appearance and optional modules
   document.querySelectorAll('[data-workspace-cc]').forEach(el => el.addEventListener('change', () => {
     state.workspaceSettings.defaultCountryCode = String(el.value || '1');
-    saveState(); renderAll(); toast(`Phone numbers without a code are now read as +${state.workspaceSettings.defaultCountryCode}.`);
+    saveState(); renderAll(); toast(`Phone numbers without a code are now read as ${phoneDialLabel(state.workspaceSettings.defaultCountryCode)} (${(phoneCountryFor(state.workspaceSettings.defaultCountryCode) || {}).name || 'unknown'}).`);
   }));
   document.querySelectorAll('[data-workspace-field]').forEach(el => {
     const saveWorkspaceField = () => {
@@ -10193,9 +10564,8 @@ function bindPageHandlers() {
     const id = el.getAttribute('data-calendar-delete');
     const event = (state.calendarEvents || []).find(item => item.id === id);
     if (!event || !confirm(`Delete reminder "${event.title}"?`)) return;
-    recordDeletion(id);
-    state.calendarEvents = state.calendarEvents.filter(item => item.id !== id);
-    saveState(); renderPage(); toast('Reminder deleted.');
+    const entryId = trashTopLevelItem('calendarEvents', id);
+    saveState(); renderPage(); toastUndo('Reminder moved to the trash.', [entryId]);
   }));
 
   // Contacts tabs (lightweight refresh, not full page render)
@@ -10437,7 +10807,9 @@ function bindPageHandlersRest() {
     if (a === 'import-xlsx') el.addEventListener('click', importXlsx);
     if (a === 'find-duplicates') el.addEventListener('click', findDuplicateLeads);
     if (a === 'tidy-phones') el.addEventListener('click', tidyPhoneNumbers);
+    if (a === 'open-trash') el.addEventListener('click', () => navigateTo('trash'));
   });
+  if (ui.page === 'trash') bindTrashHandlers(document.getElementById('page-root'));
 
   // Row clicks
   document.querySelectorAll('[data-action="open-contact"]').forEach(el => {
@@ -10701,7 +11073,7 @@ function bindDrawerHandlers() {
   document.querySelectorAll('[data-quick-when-toggle]').forEach(el => el.addEventListener('click', () => { ui.quickLogWhenOpen = !ui.quickLogWhenOpen; if (!ui.quickLogWhenOpen) { ui.quickLogWhen = ''; ui.quickLogDuration = ''; } renderContactDrawer(); }));
   document.querySelectorAll('[data-quick-when]').forEach(el => el.addEventListener('change', () => { ui.quickLogWhen = el.value; }));
   document.querySelectorAll('[data-quick-duration]').forEach(el => el.addEventListener('input', () => { ui.quickLogDuration = el.value; }));
-  document.querySelectorAll('details[data-drawer-section]').forEach(el => el.addEventListener('toggle', () => { if (el.getAttribute('data-drawer-section') === 'details') ui.drawerDetailsOpen = el.open; if (el.getAttribute('data-drawer-section') === 'people') ui.drawerPeopleOpen = el.open; }));
+  document.querySelectorAll('details[data-drawer-section]').forEach(el => el.addEventListener('toggle', () => { if (el.getAttribute('data-drawer-section') === 'details') ui.drawerDetailsOpen = el.open; if (el.getAttribute('data-drawer-section') === 'people') ui.drawerPeopleOpen = el.open; if (el.getAttribute('data-drawer-section') === 'addresses') ui.drawerAddressesOpen = el.open; }));
   document.querySelectorAll('[data-pick-project-card]').forEach(el => el.addEventListener('focusin', () => { const id = el.getAttribute('data-pick-project-card'); if (ui.drawerProjectId !== id) { ui.drawerProjectId = id; const head = document.querySelector('#drawer-root .drawer-head'); if (head) { /* keep typing: refresh the header only */ const tmp = document.createElement('div'); tmp.innerHTML = drawerHeadHtml(c, ''); head.replaceWith(tmp.firstElementChild); bindDrawerHeadHandlersOnly(c); } } }));
   document.querySelectorAll('[data-action="quick-log"]').forEach(el => el.addEventListener('click', () => {
     const channel = ui.quickLogChannel || 'call';
@@ -10779,11 +11151,11 @@ function bindDrawerHandlers() {
   document.querySelectorAll('[data-action="remove-project"]').forEach(el => el.addEventListener('click', () => {
     const p = findProject(c, el.getAttribute('data-project-id'));
     if (!p) return;
-    if (!confirm(`Remove ${projectName(c, p)} from ${c.name || 'this lead'}? Estimates stay on the lead.`)) return;
-    c.projects = contactProjects(c).filter(item => item.id !== p.id);
-    recordDeletion(p.id);
-    syncProjectMirror(c);
+    if (!confirm(`Remove ${projectName(c, p)} from ${c.name || 'this lead'}? Estimates stay on the lead; the project waits in the trash.`)) return;
+    c.projects = contactProjects(c);
+    const entryId = trashSubItem(c, 'projects', p.id);
     saveState(); renderContactDrawer();
+    toastUndo('Project moved to the trash.', [entryId]);
     if (ui.page === 'projects' || ui.page === 'contacts') renderPage();
     toast(`${projectName(c, p)} removed.`);
   }));
@@ -10925,13 +11297,67 @@ function bindDrawerHandlers() {
   document.querySelectorAll('[data-action="delete-subcontact"]').forEach(el => {
     el.addEventListener('click', () => {
       const person = (c.subcontacts || []).find(item => item.id === el.getAttribute('data-id'));
-      if (!person || !confirm(`Delete ${person.name} from this company?`)) return;
-      recordDeletion(person.id);
-      c.subcontacts = (c.subcontacts || []).filter(item => item.id !== person.id);
+      if (!person || !confirm(`Remove ${person.name} from this company?`)) return;
+      const entryId = trashSubItem(c, 'subcontacts', person.id);
       saveState();
+      toastUndo(`${person.name} moved to the trash.`, [entryId]);
       if (ui.page === 'contacts') renderPage();
       renderContactDrawer();
       toast('Company contact removed.');
+    });
+  });
+
+  // Addresses
+  const openAddressEditor = (existing) => {
+    const labelOptions = [...ADDRESS_LABELS, ...(existing?.label && !ADDRESS_LABELS.includes(existing.label) ? [existing.label] : [])];
+    openModal({
+      title: existing ? 'Edit address' : 'Add address',
+      subtitle: 'Kept with the lead, next to the people at the company.',
+      fields: [
+        { key:'label', label:'What is this address', type:'select', value: existing?.label || 'Office', options: labelOptions.map(l => ({ value:l, label:l })) },
+        { key:'street', label:'Street', type:'text', value: existing?.street || '', placeholder:'Street and number, suite / floor' },
+        { key:'city', label:'City', type:'text', value: existing?.city || '', placeholder:'City' },
+        { key:'state', label:'State / region', type:'text', value: existing?.state || '', placeholder:'e.g. FL' },
+        { key:'zip', label:'ZIP / postal code', type:'text', value: existing?.zip || '', placeholder:'ZIP' },
+        { key:'country', label:'Country', type:'text', value: existing?.country || '', placeholder:'Leave empty for USA' },
+        { key:'notes', label:'Notes', type:'textarea', rows:2, value: existing?.notes || '', placeholder:'Access, parking, delivery hours, who to ask for…' },
+      ],
+      submitLabel: existing ? 'Save address' : 'Add address',
+      onSubmit: values => {
+        const record = { id: existing?.id || cryptoId(), label: String(values.label || '').trim(), street: String(values.street || '').trim(), city: String(values.city || '').trim(), state: String(values.state || '').trim(), zip: String(values.zip || '').trim(), country: String(values.country || '').trim(), notes: String(values.notes || '').trim() };
+        if (!addressOneLine(record)) { toast('Enter at least the street or the city.'); return false; }
+        c.addresses = Array.isArray(c.addresses) ? c.addresses : [];
+        if (existing) { const i = c.addresses.findIndex(item => item.id === existing.id); if (i >= 0) c.addresses[i] = record; else c.addresses.push(record); }
+        else c.addresses.push(record);
+        ui.drawerAddressesOpen = true;
+        saveState();
+        if (ui.page === 'contacts') renderPage();
+        renderContactDrawer();
+        toast(existing ? 'Address updated.' : 'Address added.');
+      },
+    });
+  };
+  const addAddress = document.querySelector('[data-action="add-address"]');
+  if (addAddress) addAddress.addEventListener('click', () => openAddressEditor(null));
+  document.querySelectorAll('[data-action="edit-address"]').forEach(el => el.addEventListener('click', () => {
+    const a = (c.addresses || []).find(item => item.id === el.getAttribute('data-id'));
+    if (a) openAddressEditor(a);
+  }));
+  document.querySelectorAll('[data-action="copy-address"]').forEach(el => el.addEventListener('click', async () => {
+    const a = (c.addresses || []).find(item => item.id === el.getAttribute('data-id'));
+    if (!a) return;
+    try { await navigator.clipboard.writeText(addressOneLine(a)); toast('Address copied.'); } catch (e) { toast(addressOneLine(a)); }
+  }));
+  document.querySelectorAll('[data-action="delete-address"]').forEach(el => {
+    el.addEventListener('click', () => {
+      const a = (c.addresses || []).find(item => item.id === el.getAttribute('data-id'));
+      if (!a || !confirm(`Remove the ${a.label || ''} address ${addressOneLine(a)}?`)) return;
+      const entryId = trashSubItem(c, 'addresses', a.id);
+      saveState();
+      toastUndo('Address moved to the trash.', [entryId]);
+      if (ui.page === 'contacts') renderPage();
+      renderContactDrawer();
+      toast('Address removed.');
     });
   });
 
@@ -11000,7 +11426,7 @@ function bindDrawerHandlers() {
     });
   }));
   document.querySelectorAll('[data-action="delete-meeting"]').forEach(el => {
-    el.addEventListener('click', () => { if (!confirm('Delete this meeting?')) return; recordDeletion(el.getAttribute('data-id')); c.meetings = (c.meetings||[]).filter(x => x.id !== el.getAttribute('data-id')); saveState(); renderContactDrawer(); });
+    el.addEventListener('click', () => { if (!confirm('Delete this meeting?')) return; const entryId = trashSubItem(c, 'meetings', el.getAttribute('data-id')); saveState(); renderContactDrawer(); toastUndo('Meeting moved to the trash.', [entryId]); });
   });
   // Enter / cancel / save meeting edit
   document.querySelectorAll('[data-action="edit-meeting"]').forEach(el => {
@@ -11133,7 +11559,7 @@ function bindDrawerHandlers() {
     });
   });
   document.querySelectorAll('[data-action="delete-call"]').forEach(el => {
-    el.addEventListener('click', () => { if (!confirm('Delete this log entry?')) return; recordDeletion(el.getAttribute('data-id')); c.calls = (c.calls||[]).filter(x => x.id !== el.getAttribute('data-id')); invalidateNoResponseResult(); saveState(); renderContactDrawer(); });
+    el.addEventListener('click', () => { if (!confirm('Delete this log entry?')) return; const entryId = trashSubItem(c, 'calls', el.getAttribute('data-id')); saveState(); renderContactDrawer(); toastUndo('Log entry moved to the trash.', [entryId]); });
   });
   // Enter edit mode for a comm entry
   document.querySelectorAll('[data-action="edit-comm"]').forEach(el => {
@@ -11198,10 +11624,9 @@ function bindDrawerHandlers() {
     const id = el.getAttribute('data-id');
     const f = (c.files || []).find(x => x.id === id); if (!f) return;
     if (!confirm(`Remove the link "${f.label || fileLinkHost(f.url)}"? The files in the cloud are not touched.`)) return;
-    recordDeletion(id);
-    c.files = c.files.filter(x => x.id !== id);
+    const entryId = trashSubItem(c, 'files', id);
     saveState(); renderContactDrawer();
-    toast('Link removed.');
+    toastUndo('Link moved to the trash.', [entryId]);
   }));
 
   document.querySelectorAll('[data-action="add-render-request"]').forEach(el => {
@@ -11234,10 +11659,9 @@ function bindDrawerHandlers() {
   document.querySelectorAll('[data-action="delete-render-request"]').forEach(el => {
     el.addEventListener('click', () => {
       if (!confirm('Delete this render request?')) return;
-      recordDeletion(el.getAttribute('data-id'));
-      c.renderRequests = (c.renderRequests || []).filter(x => x.id !== el.getAttribute('data-id'));
+      const entryId = trashSubItem(c, 'renderRequests', el.getAttribute('data-id'));
       saveState(); renderContactDrawer();
-      toast('Render request deleted.');
+      toastUndo('Render request moved to the trash.', [entryId]);
     });
   });
   document.querySelectorAll('[data-action="edit-render-request"]').forEach(el => {
@@ -11297,10 +11721,9 @@ function bindDrawerHandlers() {
   document.querySelectorAll('[data-action="delete-render"]').forEach(el => {
     el.addEventListener('click', () => {
       if (!confirm('Delete this render?')) return;
-      recordDeletion(el.getAttribute('data-id'));
-      c.renders = (c.renders || []).filter(x => x.id !== el.getAttribute('data-id'));
+      const entryId = trashSubItem(c, 'renders', el.getAttribute('data-id'));
       saveState(); renderContactDrawer();
-      toast('Render record deleted.');
+      toastUndo('Render moved to the trash.', [entryId]);
     });
   });
   document.querySelectorAll('[data-action="edit-render"]').forEach(el => {
@@ -11459,7 +11882,7 @@ function bindDrawerHandlers() {
     });
   });
   document.querySelectorAll('[data-action="delete-sale"]').forEach(el => {
-    el.addEventListener('click', () => { if (!confirm('Delete this estimate / sale?')) return; recordDeletion(el.getAttribute('data-id')); c.sales = (c.sales||[]).filter(x => x.id !== el.getAttribute('data-id')); tidyOptionGroups(c); saveState(); renderContactDrawer(); });
+    el.addEventListener('click', () => { if (!confirm('Delete this estimate / sale?')) return; const entryId = trashSubItem(c, 'sales', el.getAttribute('data-id')); saveState(); renderContactDrawer(); toastUndo('Estimate moved to the trash.', [entryId]); });
   });
   // Owner-only fix for a sale that was logged or marked sold by the wrong person (e.g. a
   // manager entering it on a teammate's behalf) — corrects who gets commission credit without
@@ -11534,9 +11957,9 @@ function bindDrawerHandlers() {
   document.querySelectorAll('[data-action="delete-order"]').forEach(el => {
     el.addEventListener('click', () => {
       if (!confirm('Delete this production order?')) return;
-      recordDeletion(el.getAttribute('data-order-id'));
-      c.orders = (c.orders || []).filter(x => x.id !== el.getAttribute('data-order-id'));
+      const entryId = trashSubItem(c, 'orders', el.getAttribute('data-order-id'));
       saveState(); renderContactDrawer();
+      toastUndo('Production order moved to the trash.', [entryId]);
     });
   });
   document.querySelectorAll('[data-action="toggle-order-flag"]').forEach(el => {
@@ -11640,16 +12063,13 @@ function bindDrawerHandlers() {
     toast(makingCampaign ? 'Marked as an advertisement campaign lead.' : 'Moved back to regular leads.');
   });
 
-  // Delete contact
+  // Delete contact → trash (restorable for TRASH_KEEP_DAYS)
   const btnDel = document.querySelector('[data-action="delete-contact"]');
   if (btnDel) btnDel.addEventListener('click', () => {
-    if (!confirm(`Delete contact "${c.name}"? This cannot be undone.`)) return;
-    // Contacts holding financial records are deliberately kept by the backend (it re-adds them),
-    // so only tombstone the ones that will actually stay deleted.
-    if (!(c.sales || []).length) recordDeletion(c.id);
-    state.contacts = state.contacts.filter(x => x.id !== c.id);
-    ui.drawerContactId = null;
+    if (!confirm(`Move "${c.name || 'this lead'}" to the trash? It can be restored from the Trash for ${TRASH_KEEP_DAYS} days.`)) return;
+    const entryId = trashContact(c);
     saveState(); renderAll();
+    toastUndo(`${c.name || 'Lead'} moved to the trash.`, [entryId]);
   });
 }
 
@@ -11669,7 +12089,7 @@ function isBlankContact(c) {
   if (!c || (c.name !== 'New contact' && c.name !== 'New project')) return false;
   const emptyText = ['pointOfContact','email','phone','company','role','website','statusReason','nextStep','notes','campaignName']
     .every(key => !String(c[key] || '').trim());
-  const emptyArrays = ['tags','subcontacts','meetings','calls','renders','renderRequests','orders','sales','projectLabels','projects']
+  const emptyArrays = ['tags','subcontacts','addresses','meetings','calls','renders','renderRequests','orders','sales','projectLabels','projects']
     .every(key => !(c[key] && c[key].length));
   const untouchedDefaults = (c.status || 'Warm') === 'Warm' && (c.leadSource || 'Regular') === 'Regular'
     && !c.nextActionDue && !c.onHoldUntil && !c.category;
@@ -11679,12 +12099,10 @@ function isBlankContact(c) {
 function cleanupBlankContacts() {
   const blanks = visibleContacts().filter(isBlankContact);
   if (!blanks.length) { toast('No empty draft contacts found.'); return; }
-  if (!confirm(`Delete ${blanks.length} empty draft contact${blanks.length===1?'':'s'} with no information entered? This cannot be undone.`)) return;
-  const blankIds = new Set(blanks.map(item => item.id));
-  recordDeletion(...blankIds);
-  state.contacts = state.contacts.filter(item => !blankIds.has(item.id));
-  if (blankIds.has(ui.drawerContactId)) ui.drawerContactId = null;
+  if (!confirm(`Move ${blanks.length} empty draft contact${blanks.length===1?'':'s'} with no information entered to the trash?`)) return;
+  const entryIds = trashContacts(blanks);
   saveState(); renderAll();
+  toastUndo(`${entryIds.length} empty draft${entryIds.length===1?'':'s'} moved to the trash.`, entryIds);
   toast(`Deleted ${blanks.length} empty draft contact${blanks.length===1?'':'s'}.`);
 }
 
@@ -11986,9 +12404,8 @@ function runTask(id, options = {}) {
 }
 function deleteTask(id) {
   if (!confirm('Delete this task?')) return;
-  recordDeletion(id);
-  state.tasks = state.tasks.filter(x => x.id !== id);
-  saveState(); renderPage();
+  const entryId = trashTopLevelItem('tasks', id);
+  saveState(); renderPage(); toastUndo('Automation moved to the trash.', [entryId]);
 }
 
 /* ----------------- Backup / Import ----------------- */
@@ -12200,6 +12617,7 @@ function downloadWorkbook(filename, sheets) {
 function exportContactsXlsx() {
   const contacts = [];
   const subcontacts = [];
+  const addresses = [];
   const communications = [];
   const meetings = [];
   const sales = [];
@@ -12236,10 +12654,22 @@ function exportContactsXlsx() {
       'Created at': c.createdAt || '',
       Meetings: (c.meetings || []).length,
       'Additional company contacts': (c.subcontacts || []).length,
+      Addresses: (c.addresses || []).map(a => `${a.label ? `${a.label}: ` : ''}${addressOneLine(a)}`).join(' | '),
       'Communication logs': (c.calls || []).length,
       Estimates: estimateSetCount(c.sales || []),
       'Sold estimates': (c.sales || []).filter(s => saleIsSold(s)).length,
       'Sold value (USD)': (c.sales || []).filter(s => saleIsSold(s)).reduce((total, s) => total + Number(s.amount || 0), 0),
+    });
+    for (const a of (c.addresses || [])) addresses.push({
+      ...contactBase,
+      'Address ID': a.id || '',
+      Label: a.label || '',
+      Street: a.street || '',
+      City: a.city || '',
+      'State / region': a.state || '',
+      'ZIP / postal code': a.zip || '',
+      Country: a.country || '',
+      Notes: a.notes || '',
     });
     for (const person of (c.subcontacts || [])) subcontacts.push({
       ...contactBase,
@@ -12307,6 +12737,7 @@ function exportContactsXlsx() {
   downloadWorkbook(`lumexa-contacts-${exportStamp()}.xlsx`, [
     { name:'Contacts', rows:contacts },
     { name:'Company contacts', rows:subcontacts },
+    { name:'Addresses', rows:addresses },
     { name:'Communications', rows:communications },
     { name:'Meetings', rows:meetings },
     { name:'Estimates & sales', rows:sales },
@@ -12660,6 +13091,28 @@ function toast(msg) {
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { root.innerHTML = ''; }, 2400);
 }
+// "Moved to the trash · Undo": the undo restores the given trash entries on the spot.
+function toastUndo(msg, entryIds) {
+  const ids = (entryIds || []).filter(Boolean);
+  ui.lastTrashEntryIds = ids;
+  const root = document.getElementById('toast-root');
+  if (!root) return;
+  root.innerHTML = `<div class="toast toast-undo" data-testid="toast">${esc(msg)}${ids.length ? ` <button type="button" class="toast-undo-btn" data-action="undo-trash" data-testid="btn-undo-trash">Undo</button>` : ''}</div>`;
+  const btn = root.querySelector && root.querySelector('[data-action="undo-trash"]');
+  if (btn) btn.addEventListener('click', () => { root.innerHTML = ''; undoLastTrash(); });
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { root.innerHTML = ''; }, 8000);
+}
+function undoLastTrash() {
+  const ids = ui.lastTrashEntryIds || [];
+  ui.lastTrashEntryIds = [];
+  let n = 0;
+  for (const id of ids) if (restoreTrashEntry(id).ok) n++;
+  if (!n) { toast('Nothing to undo.'); return 0; }
+  saveState(); renderAll();
+  toast(n === 1 ? 'Restored.' : `Restored ${n} items.`);
+  return n;
+}
 
 /* ----------------- modal forms ----------------- */
 function closeModal() {
@@ -12731,6 +13184,7 @@ function svgIcon(name) {
     case 'star':  return wrap(`<path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9L12 16.9l-5.3 2.8 1.1-5.9-4.3-4.1 5.9-.8z"/>`);
     case 'grid':  return wrap(`<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>`);
     case 'folder': return wrap(`<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>`);
+    case 'map': return wrap(`<path d="M12 21s-6-5.3-6-10a6 6 0 0 1 12 0c0 4.7-6 10-6 10z"/><circle cx="12" cy="11" r="2.2"/>`);
     case 'columns': return wrap(`<rect x="3" y="4" width="5" height="16" rx="1"/><rect x="10" y="4" width="5" height="16" rx="1"/><rect x="17" y="4" width="4" height="16" rx="1"/>`);
     case 'calendar': return wrap(`<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/><path d="M8 14h2M14 14h2M8 18h2M14 18h2"/>`);
     case 'shield': return wrap(`<path d="M12 3l8 3v5c0 5-3.3 8.4-8 10-4.7-1.6-8-5-8-10V6l8-3z"/><path d="M9 12l2 2 4-4"/>`);
